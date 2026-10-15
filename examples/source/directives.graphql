@@ -1,0 +1,2 @@
+directive @backeneko(value: String) on FIELD_DEFINITION
+directive @mock(value: String) on FIELD_DEFINITION
