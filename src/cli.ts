@@ -18,24 +18,49 @@ import { runtime } from "./runtime.ts";
 import { startServer } from "./server.ts";
 import { watchWorkspace } from "./watch.ts";
 
+function colorEnabled(stream: { isTTY?: boolean }): boolean {
+  if (process.env.NO_COLOR) return false;
+  const force = process.env.FORCE_COLOR;
+  if (force !== undefined && force !== "" && force !== "0") return true;
+  return Boolean(stream.isTTY);
+}
+
+function paint(stream: { isTTY?: boolean }, code: string, text: string): string {
+  return colorEnabled(stream) ? `\u001b[${code}m${text}\u001b[0m` : text;
+}
+
 function log(message: string): void {
   console.log(`[backeneko] ${message}`);
 }
 
 function warn(message: string): void {
-  console.warn(`[backeneko] warning: ${message}`);
+  console.warn(paint(process.stderr, "1;33", `[backeneko] warning: ${message}`));
 }
 
 function logError(message: string): void {
-  console.error(`[backeneko] error: ${message}`);
+  console.error(paint(process.stderr, "1;31", `[backeneko] error: ${message}`));
 }
 
 function fail(message: string): never {
-  console.error(`[backeneko] error: ${message}`);
+  console.error(paint(process.stderr, "1;31", `[backeneko] error: ${message}`));
   process.exit(1);
 }
 
+const LOGO = [
+  "   /\\_/\\",
+  "  ( =.= ) ( (",
+  "  /    \\  / /",
+  " (_|__|_)/_/",
+].join("\n");
+
+function printLogo(): void {
+  console.log(paint(process.stdout, "36", LOGO));
+  console.log("");
+}
+
 async function main(): Promise<void> {
+  printLogo();
+
   const options = parseCliArgs();
 
   if (options.help) {
@@ -67,7 +92,7 @@ async function main(): Promise<void> {
 
   const server = startServer(options.port, { validate: options.validate });
   log(`mock GraphQL backend on http://localhost:${server.port}/graphql`);
-  if (!options.validate) log("query validation disabled");
+  if (!options.validate) warn("query validation disabled");
   log(`hot reload watching ${path.relative(cwd, targetDir)}`);
 
   watchWorkspace(targetDir, async (changed) => {
@@ -77,7 +102,13 @@ async function main(): Promise<void> {
         await loadSchema(schemaPath);
         log(`schema reloaded (${rel})`);
       } catch (error) {
-        console.error(`[backeneko] schema reload failed: ${error instanceof Error ? error.message : error}`);
+        console.error(
+          paint(
+            process.stderr,
+            "1;31",
+            `[backeneko] schema reload failed: ${error instanceof Error ? error.message : error}`,
+          ),
+        );
       }
     }
     const previous = runtime.modules;

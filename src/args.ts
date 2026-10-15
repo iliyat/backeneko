@@ -43,7 +43,7 @@ export function printHelp(): void {
   console.log(`backeneko — mock GraphQL backend generated from .graphql schema files
 
 Usage:
-  bun run src/cli.ts [--source=<schema-directory>] [options]
+  backeneko [--source=<schema-directory>] [options]
 
 Options:
   --source=<dir>   Directory with .graphql/.gql schema files. Regenerates the

@@ -3,14 +3,43 @@
   "version": "0.1.0",
   "description": "Mock GraphQL backend generated from .graphql schema files, with hot reload",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iliyat/backeneko.git"
+  },
+  "homepage": "https://github.com/iliyat/backeneko#readme",
+  "bugs": {
+    "url": "https://github.com/iliyat/backeneko/issues"
+  },
   "bin": {
     "backeneko": "./src/cli.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "packageManager": "bun@1.3.14",
+  "keywords": [
+    "graphql",
+    "mock",
+    "schema",
+    "bun",
+    "backend",
+    "hot-reload",
+    "sdl"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "start": "bun run src/cli.ts",
     "demo": "bun run src/cli.ts --source=examples/source --port=4000",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "prepublishOnly": "bun run typecheck && bun test"
   },
   "dependencies": {
     "graphql": "^16.11.0"

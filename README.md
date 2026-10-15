@@ -1,16 +1,33 @@
 # backeneko
+```text
+   /\_/\
+  ( =.= ) ( (
+  /    \  / /
+ (_|__|_)/_/
+```
+
 
 Mock GraphQL backend generated from `.graphql` schema files, with hot reload.
+
+## Requirements
+
+Bun >= 1.1 — backeneko runs on Bun (`Bun.serve`, `Bun.build`, recursive
+`fs.watch`).
+
+## Install
+
+```bash
+bun add -g backeneko   # or: npm i -g backeneko
+```
 
 ## Quick start
 
 ```bash
-bun install
-bun run src/cli.ts --source=./examples/source --port=4000
+backeneko --source=./schemas --port=4000
 ```
 
-Open <http://localhost:4000/> for a minimal query inspector, or POST to
-`/graphql`:
+`--source` is scanned recursively for `*.graphql` / `*.gql`. Open
+<http://localhost:4000/> for a minimal query inspector, or POST to `/graphql`:
 
 ```bash
 curl -s http://localhost:4000/graphql \
@@ -20,13 +37,13 @@ curl -s http://localhost:4000/graphql \
 
 ## How it works
 
-On the first run backeneko scans `--source` for `*.graphql` / `*.gql`, merges
-them into one schema and creates a workspace:
+On the first run backeneko scans `--source`, merges the files into one schema
+and creates a workspace:
 
 ```
 .backeneko/
 ├── schema.graphql              # merged schema (rewritten each start)
-├── tsconfig.json               # @entities/... aliases: override → generated
+├── tsconfig.json               # @<kind>/* aliases: override → generated
 ├── generated/                  # disposable mirror, rewritten each start
 │   ├── entities/
 │   │   ├── User.ts             # mock entity (default export)
@@ -36,8 +53,9 @@ them into one schema and creates a workspace:
 │   │   └── user.ts
 │   └── mutations/
 │       └── createUser.ts
-└── override/                   # your files win; never written by backeneko
-    └── entities/User.ts        # shadows generated/entities/User.ts
+├── override/                   # your files win; never written by backeneko
+│   └── entities/User.ts        # shadows generated/entities/User.ts
+└── cache/                      # bundled mock modules (per content hash)
 ```
 
 - Every root field gets its own TS file exporting a resolver function.
@@ -83,12 +101,36 @@ type Product {
 ## CLI
 
 ```
-bun run src/cli.ts --source=<dir> [--port=4000] [--dir=.backeneko] [--no-validate]
+backeneko --source=<dir> [--port=4000] [--dir=.backeneko] [--no-validate]
 ```
 
 - `--source=<dir>` — directory with schema files (recursive).
 - `--port=<n>` — HTTP port (default `4000`).
 - `--dir=<dir>` — workspace directory (default `.backeneko`).
 - `--no-validate` — skip validating incoming queries against the schema.
+
+## Development
+
+```bash
+bun install
+bun run demo        # run against examples/source on :4000
+bun run typecheck
+bun test
+```
+
+## Publishing
+
+Releases are published to npm by the [Publish](.github/workflows/publish.yml)
+GitHub Actions workflow. To cut a release:
+
+1. Bump `version` in `package.json` and commit it to `master`.
+2. Push a matching tag on that `master` commit: `git tag v0.1.0 && git push origin v0.1.0`.
+
+The workflow refuses to publish if the tag's commit is not an ancestor of
+`master`.
+
+The workflow runs typecheck + tests and publishes with provenance using npm
+[Trusted Publishing](https://docs.npmjs.com/trusted-publishers) (OIDC), so no
+`NPM_TOKEN` secret is required. It relies on:
 
 See `AGENTS.md` for contributor guidance.
