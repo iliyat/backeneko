@@ -56,7 +56,10 @@ Options:
 
 Behavior:
   * with --source: schema.graphql and generated/ are rewritten on every start,
-    including files whose type or field disappeared from the schema
+    including files whose type or field disappeared from the schema, and the
+    source directory is watched — editing, adding or removing .graphql/.gql
+    files regenerates the workspace and hot-reloads the schema and mocks
+    (.git, node_modules and dist are ignored)
   * override/entities|queries|mutations|subscriptions/<name>.ts wins over
     generated/<same path>; overrides are loaded, never written or removed
   * without --source: an existing <dir> is served unchanged

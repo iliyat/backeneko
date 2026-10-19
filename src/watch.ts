@@ -3,17 +3,25 @@ import { BUNDLE_DIR } from "./mocks.ts";
 
 const DEBOUNCE_MS = 150;
 
-export function watchWorkspace(
+export interface WatchOptions {
+  // Decides which events are dropped before batching; receives the path as
+  // reported by fs.watch (relative to the watched directory).
+  ignore?: (relativePath: string) => boolean;
+}
+
+export function watchTree(
   dir: string,
   onChange: (changedFiles: string[]) => void,
+  options: WatchOptions = {},
 ): FSWatcher {
+  const ignore = options.ignore ?? ((relative: string) => relative.split(/[\\/]/)[0] === BUNDLE_DIR);
   const pending = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const watcher = watch(dir, { recursive: true }, (_event, filename) => {
     if (!filename) return;
     const relative = filename.toString();
-    if (relative.split(/[\\/]/)[0] === BUNDLE_DIR) return;
+    if (ignore(relative)) return;
 
     pending.add(relative);
     if (timer) clearTimeout(timer);

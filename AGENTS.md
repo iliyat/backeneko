@@ -47,7 +47,7 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
 | `src/resolvers.ts` | build executable schema, attach resolvers, mock fallback |
 | `src/runtime.ts` | mutable shared state (`schema`, `modules`) |
 | `src/server.ts` | `Bun.serve` HTTP: `/graphql` (GET/POST), HTML inspector at `/` |
-| `src/watch.ts` | `fs.watch` on the workspace with debounce |
+| `src/watch.ts` | recursive `fs.watch` with debounce (workspace, `--source` tree) |
 
 ### Behavior rules
 
@@ -56,6 +56,11 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
   content changes; files whose type/field left the schema are pruned). The
   `override/` tree is **never** written or removed. Without `--source`, an
   existing workspace is served as-is.
+- With `--source`, the source tree is watched as well: any change to its
+  `.graphql`/`.gql` files re-runs generation and then reloads schema + mocks
+  (only if generation actually wrote something). `.git`, `node_modules` and
+  `dist` are ignored. Generation never exits the process while watching — a
+  broken source logs an error and the last good workspace keeps serving.
 - Loading prefers `override/<kind>/<name>.ts` over `generated/<kind>/<name>.ts`
   over the pre-`generated/` top-level `<kind>/` layout (and the legacy `mocks/`
   directory last), so a user override always shadows the generated file.

@@ -4,6 +4,20 @@ import path from "node:path";
 const SCHEMA_EXTENSIONS = new Set([".graphql", ".gql"]);
 const IGNORED_DIRECTORIES = new Set(["node_modules", ".git", "dist"]);
 
+// Watches only what `collectSchemaFiles` could read: the final segment must be
+// a schema file, and no directory on the way may be one the walker skips
+// (`.git`, `node_modules`, `dist`, hidden dirs). Without the extension check
+// editor temporaries (`schema.graphql~`, `.swp`) would trigger regeneration.
+export function isIgnoredSourcePath(relativePath: string): boolean {
+  const segments = relativePath.split(/[\\/]/);
+  const file = segments[segments.length - 1];
+  if (!file || !SCHEMA_EXTENSIONS.has(path.extname(file))) return true;
+  for (const segment of segments.slice(0, -1)) {
+    if (segment.startsWith(".") || IGNORED_DIRECTORIES.has(segment)) return true;
+  }
+  return false;
+}
+
 export interface SchemaSourceFile {
   absolutePath: string;
   relativePath: string;
