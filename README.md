@@ -135,19 +135,4 @@ bun run typecheck
 bun test
 ```
 
-## Publishing
-
-Releases are published to npm by the [Publish](.github/workflows/publish.yml)
-GitHub Actions workflow. To cut a release:
-
-1. Bump `version` in `package.json` and commit it to `master`.
-2. Push a matching tag on that `master` commit: `git tag v0.1.0 && git push origin v0.1.0`.
-
-The workflow refuses to publish if the tag's commit is not an ancestor of
-`master`.
-
-The workflow runs typecheck + tests and publishes with provenance using npm
-[Trusted Publishing](https://docs.npmjs.com/trusted-publishers) (OIDC), so no
-`NPM_TOKEN` secret is required. It relies on:
-
 See `AGENTS.md` for contributor guidance.
