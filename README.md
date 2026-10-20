@@ -85,16 +85,33 @@ type Product {
   title: String @backeneko(value: "Pinned Title")
   price: Int @mock(value: "199")
   inStock: Boolean @backeneko(value: "true")
+  tags: [String] @backeneko(empty: true)
+  note: String @mock(empty: true)
 }
 ```
 
-- No need to declare the directive — backeneko provides it on its own.
+- No need to declare the directive — backeneko provides it on its own. If the
+  schema does declare it, missing backeneko arguments (`value: String`,
+  `empty: Boolean`) are appended so both always validate.
 - The value is a string and is cast to the field's type where possible:
   `Int`/`Float` → number, `Boolean` → boolean, `String`/`ID`/enum/custom
   scalars → string. An uncastable value is ignored with a warning and the type
   default is kept.
-- Only single scalar/enum fields are supported. On list or object/interface/
-  union fields the directive is ignored with a warning.
+- `empty: true` asks for the type's empty value instead of `value`: `""` for
+  `String`/`ID`, `[]` for lists and `null` for any other scalar — but only when
+  the field is nullable; on a non-null field with no empty value (`Int!`, a
+  non-null relation) it is ignored with a warning. `empty: true` wins over
+  `value` (with a warning).
+- `value` only supports single scalar/enum fields. On list or object/interface/
+  union fields it is ignored with a warning — use `empty: true` there.
+- Object/interface/union fields (including lists of them) are pre-filled with
+  the related entity through a getter — `get pharmacies() { return [Pharmacy]; }`
+  or `get author() { return Author; }` — unless an `override/entities/<Type>.ts`
+  replaces that entity. The entity is auto-coerced to the field shape: a list
+  field wraps the value (`[]` when the entity mock is empty), a singular field
+  takes the first element, so the generated literal only decides null-vs-present.
+- Both arguments only apply to entity fields, like everything else here; root
+  fields fall back to the entity mock of their return type.
 - Generated values are only defaults: an `override/<kind>/<name>.ts` file still
   replaces them entirely.
 

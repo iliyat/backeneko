@@ -2,8 +2,11 @@ type User {
   id: ID!
   name: String! @backeneko(value: "Ada Lovelace")
   email: String!
+  bio: String @backeneko(empty: true)
   role: Role! @mock(value: "ADMIN")
   posts: [Post!]!
+  badges: [String] @mock(empty: true)
+  age: Int @backeneko(empty: true)
 }
 
 enum Role {

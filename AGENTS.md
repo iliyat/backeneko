@@ -97,6 +97,11 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
 - An **entity** file's `default` export is the value used when a field
   resolves to that type (object, array, or a function returning one). A named
   export matching a field name overrides that field's resolver.
+- An interface/union entity mock is a mock of its **first concrete type** (first
+  implementor or union member): it carries that type's `__typename` plus its
+  full field set, so inline fragments on it resolve out of the box. Mock
+  directives are read from the concrete type first, then from the interface
+  itself.
 - Object/interface/union fields are pre-filled with the related entity through a
   getter (`get location() { return CustomerLocation; }`) and an `@entities/...`
   import, so relations resolve out of the box. Getters keep cyclic relations
@@ -109,12 +114,17 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
 - **Mock directives** `@backeneko(value: "...")` and `@mock(value: "...")` (both
   names are equivalent) pin an entity field's generated value. backeneko owns
   them: if a schema uses one without declaring it, `src/compile.ts` injects
-  `directive @<name>(value: String) on FIELD_DEFINITION` before SDL validation
-  (a user declaration is respected). The value is always a string and is cast
-  to the field's type where possible (`Int`/`Float`→number, `Boolean`→bool,
-  `String`/`ID`/enum/custom scalars→string). Only single scalar/enum fields are
-  supported; on list or object/interface/union fields the directive is ignored
-  with a warning and the type default is kept. Warnings are returned in
+  `directive @<name>(value: String, empty: Boolean) on FIELD_DEFINITION` before
+  SDL validation; a user declaration is kept, but missing backeneko arguments
+  are appended to it so both always validate. The value is always a string and
+  is cast to the field's type where possible (`Int`/`Float`→number,
+  `Boolean`→bool, `String`/`ID`/enum/custom scalars→string). Only single
+  scalar/enum fields are supported by `value`; on list or object/interface/
+  union fields it is ignored with a warning and the type default is kept. The
+  optional `empty: Boolean` argument asks for the type's empty value instead:
+  `""` for `String`/`ID`, `[]` for lists, `null` for anything else — on a
+  non-null field with no empty value it is ignored with a warning, and it wins
+  over `value` (with a warning). Warnings are returned in
   `GenerationResult.warnings` and printed by the CLI.
 - The legacy single `mocks/` directory (one file per type, named exports for
   root fields) is still loaded if present.

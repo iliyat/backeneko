@@ -67,6 +67,8 @@ type Product {
   title: String @backeneko(value: "Pinned Title")
   price: Int @mock(value: "199")
   inStock: Boolean @backeneko(value: "true")
+  tags: [String] @backeneko(empty: true)
+  note: String @mock(empty: true)
 }
 ```
 
@@ -74,8 +76,12 @@ type Product {
   `Boolean` → `true`/`false`, `String`/`ID`/enum/custom scalars → string.
 - An uncastable value (`"abc"` on `Int`) is ignored with a warning and the type
   default is kept.
-- Only single scalar/enum fields are supported. On list or
-  object/interface/union fields the directive is ignored with a warning.
+- `value` only supports single scalar/enum fields. On list or
+  object/interface/union fields it is ignored with a warning.
+- `empty: true` pins the type's empty value instead of `value`: `""` for
+  `String`/`ID`, `[]` for lists, `null` for anything else — but only on a
+  nullable field; on a non-null field (`Int!`, a non-null relation) it is
+  ignored with a warning. `empty: true` wins over `value` (with a warning).
 - Use this for schema-driven defaults; use an `override/` file when you need
   logic or relations.
 

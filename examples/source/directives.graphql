@@ -1,2 +1,5 @@
-directive @backeneko(value: String) on FIELD_DEFINITION
-directive @mock(value: String) on FIELD_DEFINITION
+# Both directives are optional — backeneko provides them on its own.
+# `value` pins a generated value; `empty: true` pins the type's empty value:
+# "" for String/ID, [] for lists, null for any other nullable field.
+directive @backeneko(value: String, empty: Boolean) on FIELD_DEFINITION
+directive @mock(value: String, empty: Boolean) on FIELD_DEFINITION

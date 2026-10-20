@@ -2,11 +2,8 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   buildASTSchema,
-  getNamedType,
   isEnumType,
   isInterfaceType,
-  isListType,
-  isNonNullType,
   isObjectType,
   isScalarType,
   isUnionType,
@@ -19,7 +16,13 @@ import {
   type GraphQLSchema,
   type GraphQLUnionType,
 } from "graphql";
-import { collectFieldDirectives, renderMockValue, withMockDirectives } from "./directives.ts";
+import {
+  collectFieldDirectives,
+  fieldShape,
+  renderMockValue,
+  withMockDirectives,
+  type MockDirectiveUsage,
+} from "./directives.ts";
 
 export const ENTITY_DIR = "entities";
 export const ROOT_DIRS = {
@@ -203,16 +206,16 @@ function rootTypes(schema: GraphQLSchema): GraphQLObjectType[] {
 function entityTemplate(
   schema: GraphQLSchema,
   type: GraphQLObjectType | GraphQLInterfaceType | GraphQLUnionType,
-  directiveValues: Map<string, string>,
+  directiveValues: Map<string, MockDirectiveUsage>,
   warn: (message: string) => void,
 ): string {
   if (isUnionType(type)) {
     const first = type.getTypes()[0] ?? null;
     return renderEntity(
       type.name,
-      first?.name ?? type.name,
       first?.name ?? null,
-      first ? first.getFields() : {},
+      first?.name ?? null,
+      first?.getFields() ?? {},
       directiveValues,
       warn,
     );
@@ -221,22 +224,28 @@ function entityTemplate(
     const first = schema.getPossibleTypes(type)[0] ?? null;
     return renderEntity(
       type.name,
-      type.name,
       first?.name ?? null,
-      type.getFields(),
+      first?.name ?? null,
+      first?.getFields() ?? type.getFields(),
       directiveValues,
       warn,
     );
   }
-  return renderEntity(type.name, type.name, null, type.getFields(), directiveValues, warn);
+  return renderEntity(type.name, null, null, type.getFields(), directiveValues, warn);
 }
 
+// A mock for an interface or union is really a mock of the concrete type whose
+// `__typename` it declares (the first implementor / member), so its full field
+// set is rendered — otherwise inline fragments on that type would resolve
+// against a bare interface shape. `fieldsTypeName` is null when the fields come
+// from `typeName` itself; mock directives prefer the concrete type and fall
+// back to `typeName`.
 function renderEntity(
   typeName: string,
-  ownerTypeName: string,
+  fieldsTypeName: string | null,
   typename: string | null,
   fields: Record<string, GraphQLField<unknown, unknown>>,
-  directiveValues: Map<string, string>,
+  directiveValues: Map<string, MockDirectiveUsage>,
   warn: (message: string) => void,
 ): string {
   const local = localIdentifier(typeName);
@@ -245,7 +254,7 @@ function renderEntity(
 
   if (typename !== null) body.push(`  __typename: ${JSON.stringify(typename)},`);
   for (const field of Object.values(fields)) {
-    body.push(fieldLine(ownerTypeName, local, field, imports, directiveValues, warn));
+    body.push(fieldLine(typeName, fieldsTypeName, local, field, imports, directiveValues, warn));
   }
   body.push(`};`, ``, `export default ${local};`, "");
 
@@ -259,33 +268,35 @@ function renderEntity(
 // Related entities are referenced through getters so that cyclic relations
 // (A -> B -> A) do not break module initialization.
 function fieldLine(
-  ownerTypeName: string,
+  typeName: string,
+  fieldsTypeName: string | null,
   local: string,
   field: GraphQLField<unknown, unknown>,
   imports: Set<string>,
-  directiveValues: Map<string, string>,
+  directiveValues: Map<string, MockDirectiveUsage>,
   warn: (message: string) => void,
 ): string {
-  let type = field.type;
-  let list = false;
-  while (isNonNullType(type)) type = type.ofType;
-  if (isListType(type)) {
-    list = true;
-    type = type.ofType;
-    while (isNonNullType(type)) type = type.ofType;
-  }
+  const shape = fieldShape(field.type);
+  const { named, list } = shape;
+  const usage =
+    (fieldsTypeName === null
+      ? undefined
+      : directiveValues.get(`${fieldsTypeName}.${field.name}`)) ??
+    directiveValues.get(`${typeName}.${field.name}`);
 
-  const named = getNamedType(type);
-  const mockValue = directiveValues.get(`${ownerTypeName}.${field.name}`);
-
-  if (mockValue !== undefined) {
-    const rendered = renderMockValue(mockValue, named, list);
-    if (rendered.ok) return `  ${field.name}: ${rendered.expression},`;
-    warn(`ignored @backeneko/@mock on ${ownerTypeName}.${field.name}: ${rendered.reason}`);
+  if (usage !== undefined) {
+    const rendered = renderMockValue(usage, shape);
+    if (rendered.ok) {
+      if (rendered.warning) {
+        warn(`@backeneko/@mock on ${typeName}.${field.name}: ${rendered.warning}`);
+      }
+      return `  ${field.name}: ${rendered.expression},`;
+    }
+    warn(`ignored @backeneko/@mock on ${typeName}.${field.name}: ${rendered.reason}`);
   }
 
   if (isObjectType(named) || isInterfaceType(named) || isUnionType(named)) {
-    const ref = named.name === ownerTypeName ? local : importedRef(named.name, imports);
+    const ref = named.name === typeName ? local : importedRef(named.name, imports);
     return `  get ${field.name}() { return ${list ? `[${ref}]` : ref}; },`;
   }
   if (list) return `  ${field.name}: [],`;
@@ -367,17 +378,7 @@ function mockExpressionForField(field: GraphQLField<unknown, unknown>): {
   expression: string;
 } {
   const imports: string[] = [];
-  let type = field.type;
-  let list = false;
-
-  while (isNonNullType(type)) type = type.ofType;
-  if (isListType(type)) {
-    list = true;
-    type = type.ofType;
-    while (isNonNullType(type)) type = type.ofType;
-  }
-
-  const named = getNamedType(type);
+  const { named, list } = fieldShape(field.type);
   let item: string;
 
   if (isObjectType(named) || isInterfaceType(named) || isUnionType(named)) {

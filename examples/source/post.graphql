@@ -4,6 +4,7 @@ type Post {
   body: String
   author: User
   tags: [String!]!
+  mentions: [String] @backeneko(empty: true)
 }
 
 extend type Query {

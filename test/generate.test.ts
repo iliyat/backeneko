@@ -45,6 +45,37 @@ type Query {
 }
 `;
 
+const SDL_ABSTRACT = `
+  directive @backeneko(value: String, empty: Boolean) on FIELD_DEFINITION
+
+  type Query {
+    promo: Promo!
+    search: [SearchResult!]!
+  }
+
+  interface Promo {
+    id: Int!
+    alias: String @backeneko(value: "from-interface")
+    name: String! @backeneko(value: "from-interface")
+  }
+
+  type PromoOffline implements Promo {
+    id: Int!
+    alias: String
+    name: String! @backeneko(value: "from-implementor")
+    pharmacies: [ID!]!
+    related: Promo
+  }
+
+  type PromoSimple implements Promo {
+    id: Int!
+    alias: String
+    name: String!
+  }
+
+  union SearchResult = PromoOffline | PromoSimple
+`;
+
 function rel(...segments: string[]): string {
   return path.join("generated", ...segments);
 }
@@ -192,6 +223,46 @@ describe("generateWorkspace", () => {
   });
 });
 
+describe("abstract type mocks", () => {
+  test("renders interface and union mocks as their first concrete type", async () => {
+    await generateWorkspace({ targetDir: dir, sdl: SDL_ABSTRACT });
+
+    const promo = await readFile(generated(dir, "entities", "Promo.ts"), "utf8");
+    expect(promo).toContain('__typename: "PromoOffline"');
+    expect(promo).toContain("pharmacies: []");
+    expect(promo).toContain('name: "from-implementor"');
+    expect(promo).toContain('alias: "from-interface"');
+    expect(promo).toContain("get related() { return Promo; }");
+    expect(promo).not.toContain("import Promo from");
+
+    const search = await readFile(generated(dir, "entities", "SearchResult.ts"), "utf8");
+    expect(search).toContain('__typename: "PromoOffline"');
+    expect(search).toContain("pharmacies: []");
+    expect(search).toContain('name: "from-implementor"');
+  });
+
+  test("resolves inline fragments on the concrete implementor", async () => {
+    await generateWorkspace({ targetDir: dir, sdl: SDL_ABSTRACT });
+    const schema = buildExecutableSchema(SDL_ABSTRACT);
+    runtime.schema = schema;
+    runtime.modules = await loadMockModules(dir);
+
+    try {
+      const result = await graphql({
+        schema,
+        source: "{ promo { __typename name ... on PromoOffline { pharmacies } } }",
+      });
+
+      expect(result.errors).toBeUndefined();
+      expect(result.data).toEqual({
+        promo: { __typename: "PromoOffline", name: "from-implementor", pharmacies: [] },
+      });
+    } finally {
+      runtime.modules = emptyMockModules();
+    }
+  });
+});
+
 describe("override precedence", () => {
   test("loads override entities instead of generated ones", async () => {
     await generateWorkspace({ targetDir: dir, sdl: SDL });
@@ -298,6 +369,49 @@ describe("mock directives", () => {
     expect(result.warnings.length).toBe(2);
     expect(result.warnings.some((line) => line.includes("Thing.tags"))).toBe(true);
     expect(result.warnings.some((line) => line.includes("Thing.parent"))).toBe(true);
+  });
+
+  test("renders the empty value per field type", async () => {
+    const result = await generateWorkspace({
+      targetDir: dir,
+      sdl: `
+        type Query { thing: Thing }
+        type Thing {
+          requiredName: String!
+          bio: String @backeneko(empty: true)
+          code: ID @backeneko(empty: true)
+          labels: [String] @backeneko(empty: true)
+          tags: [Int!]! @mock(empty: true)
+          age: Int @backeneko(empty: true)
+          requiredAge: Int! @backeneko(empty: true)
+          role: Role @mock(empty: true)
+          parent: Thing @backeneko(empty: true)
+          pinned: String @backeneko(value: "x", empty: true)
+        }
+        enum Role { ADMIN VIEWER }
+      `,
+    });
+
+    const thing = await readFile(generated(dir, "entities", "Thing.ts"), "utf8");
+
+    expect(thing).toContain('bio: ""');
+    expect(thing).toContain('code: ""');
+    expect(thing).toContain("labels: []");
+    expect(thing).toContain("tags: []");
+    expect(thing).toContain("age: null");
+    expect(thing).toContain("role: null");
+    expect(thing).toContain("parent: null");
+    expect(thing).toContain('pinned: ""');
+
+    expect(thing).toContain('requiredName: "Example"');
+    expect(thing).toContain("requiredAge: 0");
+    expect(result.warnings.some((line) => line.includes("Thing.requiredAge"))).toBe(true);
+    expect(
+      result.warnings.some(
+        (line) => line.includes("Thing.pinned") && line.includes("overrides value"),
+      ),
+    ).toBe(true);
+    expect(result.warnings).toHaveLength(2);
   });
 
   test("warns and keeps the type default when the value cannot be cast", async () => {

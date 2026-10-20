@@ -1,27 +1,49 @@
 import {
   Kind,
+  getNamedType,
   isEnumType,
+  isListType,
+  isNonNullType,
   isScalarType,
   parse,
   visit,
   type ConstDirectiveNode,
   type DefinitionNode,
+  type DirectiveDefinitionNode,
   type DocumentNode,
   type FieldDefinitionNode,
   type GraphQLNamedType,
+  type GraphQLType,
 } from "graphql";
 
 // The two project directives are interchangeable: `@backeneko` and `@mock`.
 export const MOCK_DIRECTIVES: readonly string[] = ["backeneko", "mock"];
 export const MOCK_DIRECTIVE_ARG = "value";
+export const MOCK_EMPTY_ARG = "empty";
+
+const MOCK_DIRECTIVE_ARGS = `${MOCK_DIRECTIVE_ARG}: String, ${MOCK_EMPTY_ARG}: Boolean`;
+
+// `empty: true` asks for the type's empty value and wins over `value`.
+export type MockDirectiveUsage =
+  | { empty: true; value?: string }
+  | { empty: false; value: string };
 
 export type MockValueResult =
-  | { ok: true; expression: string }
+  | { ok: true; expression: string; warning?: string }
   | { ok: false; reason: string };
+
+// `list` describes the outermost list, `nullable` the field itself.
+export interface FieldShape {
+  named: GraphQLNamedType;
+  list: boolean;
+  nullable: boolean;
+}
 
 // backeneko owns these directives, so a schema may use them without declaring
 // them. When a name is used but not defined, its definition is injected before
 // SDL validation (otherwise `stripUnknownDirectives` would drop the usage).
+// A user-declared definition is kept, but missing backeneko arguments are
+// appended so both arguments always validate.
 export function withMockDirectives(document: DocumentNode): DocumentNode {
   const used = new Set<string>();
   visit(document, {
@@ -35,22 +57,43 @@ export function withMockDirectives(document: DocumentNode): DocumentNode {
     if (def.kind === Kind.DIRECTIVE_DEFINITION) defined.add(def.name.value);
   }
 
+  let changed = false;
+  const definitions = document.definitions.map((definition): DefinitionNode => {
+    if (definition.kind !== Kind.DIRECTIVE_DEFINITION) return definition;
+    if (!used.has(definition.name.value)) return definition;
+    const completed = withOwnedArguments(definition);
+    if (completed === definition) return definition;
+    changed = true;
+    return completed;
+  });
+
   const additions: DefinitionNode[] = [];
   for (const name of MOCK_DIRECTIVES) {
     if (!used.has(name) || defined.has(name)) continue;
     additions.push(
-      ...parse(`directive @${name}(${MOCK_DIRECTIVE_ARG}: String) on FIELD_DEFINITION`).definitions,
+      ...parse(`directive @${name}(${MOCK_DIRECTIVE_ARGS}) on FIELD_DEFINITION`).definitions,
     );
   }
-  if (additions.length === 0) return document;
+  if (!changed && additions.length === 0) return document;
 
-  return { kind: Kind.DOCUMENT, definitions: [...additions, ...document.definitions] };
+  return { kind: Kind.DOCUMENT, definitions: [...additions, ...definitions] };
 }
 
-// Collects `Type.field` -> raw string value for every field annotated with a
-// mock directive. Covers type definitions and extensions.
-export function collectFieldDirectives(document: DocumentNode): Map<string, string> {
-  const values = new Map<string, string>();
+function withOwnedArguments(definition: DirectiveDefinitionNode): DirectiveDefinitionNode {
+  const owned = parse(`directive @owned(${MOCK_DIRECTIVE_ARGS}) on FIELD_DEFINITION`)
+    .definitions[0] as DirectiveDefinitionNode;
+  const present = new Set((definition.arguments ?? []).map((argument) => argument.name.value));
+  const missing = (owned.arguments ?? []).filter((argument) => !present.has(argument.name.value));
+  if (missing.length === 0) return definition;
+  return { ...definition, arguments: [...(definition.arguments ?? []), ...missing] };
+}
+
+// Collects `Type.field` -> usage for every field annotated with a mock
+// directive. Covers type definitions and extensions.
+export function collectFieldDirectives(
+  document: DocumentNode,
+): Map<string, MockDirectiveUsage> {
+  const values = new Map<string, MockDirectiveUsage>();
 
   for (const definition of document.definitions) {
     const name = "name" in definition ? definition.name?.value : undefined;
@@ -60,19 +103,53 @@ export function collectFieldDirectives(document: DocumentNode): Map<string, stri
     for (const field of fields) {
       const key = `${name}.${field.name.value}`;
       if (values.has(key)) continue;
-      const value = mockDirectiveValue(field.directives);
-      if (value !== undefined) values.set(key, value);
+      const usage = mockDirectiveUsage(field.directives);
+      if (usage !== undefined) values.set(key, usage);
     }
   }
 
   return values;
 }
 
+export function fieldShape(type: GraphQLType): FieldShape {
+  let nullable = true;
+  let inner: GraphQLType = type;
+  if (isNonNullType(inner)) {
+    nullable = false;
+    inner = inner.ofType;
+  }
+
+  let list = false;
+  if (isListType(inner)) {
+    list = true;
+    inner = inner.ofType;
+    while (isNonNullType(inner)) inner = inner.ofType;
+  }
+
+  return { named: getNamedType(inner), list, nullable };
+}
+
+// An empty value is `[]` for lists, `""` for String/ID and `null` for anything
+// else — but only where `null` is legal, i.e. on a nullable field.
 export function renderMockValue(
-  value: string,
-  named: GraphQLNamedType,
-  list: boolean,
+  usage: MockDirectiveUsage,
+  shape: FieldShape,
 ): MockValueResult {
+  const { named, list, nullable } = shape;
+
+  if (usage.empty) {
+    const warning =
+      usage.value === undefined
+        ? undefined
+        : `empty: true overrides value: ${JSON.stringify(usage.value)}`;
+    if (list) return emptyResult("[]", warning);
+    if (isStringScalar(named)) return emptyResult('""', warning);
+    if (nullable) return emptyResult("null", warning);
+    return { ok: false, reason: `empty: true requires a nullable field, but ${named.name} is not` };
+  }
+
+  const value = usage.value;
+
   if (list) return { ok: false, reason: "list fields are not supported yet" };
 
   if (isEnumType(named)) return { ok: true, expression: JSON.stringify(value) };
@@ -107,13 +184,32 @@ export function renderMockValue(
   return { ok: false, reason: "only scalar and enum fields are supported" };
 }
 
-function mockDirectiveValue(
+function emptyResult(expression: string, warning: string | undefined): MockValueResult {
+  return warning === undefined ? { ok: true, expression } : { ok: true, expression, warning };
+}
+
+function isStringScalar(named: GraphQLNamedType): boolean {
+  return isScalarType(named) && (named.name === "String" || named.name === "ID");
+}
+
+function mockDirectiveUsage(
   directives: readonly ConstDirectiveNode[] | undefined,
-): string | undefined {
+): MockDirectiveUsage | undefined {
   for (const directive of directives ?? []) {
     if (!MOCK_DIRECTIVES.includes(directive.name.value)) continue;
-    const argument = directive.arguments?.find((entry) => entry.name.value === MOCK_DIRECTIVE_ARG);
-    if (argument && argument.value.kind === Kind.STRING) return argument.value.value;
+
+    let value: string | undefined;
+    let empty = false;
+    for (const argument of directive.arguments ?? []) {
+      if (argument.name.value === MOCK_DIRECTIVE_ARG && argument.value.kind === Kind.STRING) {
+        value = argument.value.value;
+      } else if (argument.name.value === MOCK_EMPTY_ARG && argument.value.kind === Kind.BOOLEAN) {
+        empty = argument.value.value;
+      }
+    }
+
+    if (empty) return value === undefined ? { empty: true } : { empty: true, value };
+    if (value !== undefined) return { empty: false, value };
   }
   return undefined;
 }

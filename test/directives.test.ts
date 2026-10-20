@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { buildASTSchema, parse, print } from "graphql";
+import { buildASTSchema, parse, print, type GraphQLObjectType } from "graphql";
 import {
   collectFieldDirectives,
+  fieldShape,
   renderMockValue,
   withMockDirectives,
 } from "../src/directives.ts";
@@ -11,7 +12,9 @@ describe("withMockDirectives", () => {
     const document = withMockDirectives(parse("type User { name: String @backeneko(value: \"x\") }"));
     const printed = print(document);
 
-    expect(printed).toContain("directive @backeneko(value: String) on FIELD_DEFINITION");
+    expect(printed).toContain(
+      "directive @backeneko(value: String, empty: Boolean) on FIELD_DEFINITION",
+    );
     expect(buildASTSchema(document)).toBeDefined();
   });
 
@@ -21,8 +24,8 @@ describe("withMockDirectives", () => {
     );
     const printed = print(document);
 
-    expect(printed).toContain("directive @backeneko(value: String)");
-    expect(printed).toContain("directive @mock(value: String)");
+    expect(printed).toContain("directive @backeneko(value: String, empty: Boolean)");
+    expect(printed).toContain("directive @mock(value: String, empty: Boolean)");
   });
 
   test("leaves the document untouched when the directive is unused", () => {
@@ -40,6 +43,28 @@ describe("withMockDirectives", () => {
     const count = print(document).split("directive @backeneko").length - 1;
     expect(count).toBe(1);
   });
+
+  test("completes missing backeneko arguments on a user-declared directive", () => {
+    const document = withMockDirectives(
+      parse(`
+        directive @backeneko(value: String) on FIELD_DEFINITION
+        type User { name: String @backeneko(empty: true) }
+      `),
+    );
+
+    expect(print(document)).toContain(
+      "directive @backeneko(value: String, empty: Boolean) on FIELD_DEFINITION",
+    );
+    expect(buildASTSchema(document)).toBeDefined();
+  });
+
+  test("leaves a fully declared directive as is", () => {
+    const source = `
+      directive @mock(value: String, empty: Boolean) on FIELD_DEFINITION
+      type User { name: String @mock(empty: true) }
+    `;
+    expect(print(withMockDirectives(parse(source)))).toBe(print(parse(source)));
+  });
 });
 
 describe("collectFieldDirectives", () => {
@@ -52,9 +77,26 @@ describe("collectFieldDirectives", () => {
     );
 
     const values = collectFieldDirectives(document);
-    expect(values.get("User.name")).toBe("Ada");
-    expect(values.get("User.email")).toBe("ada@example.com");
+    expect(values.get("User.name")).toEqual({ empty: false, value: "Ada" });
+    expect(values.get("User.email")).toEqual({ empty: false, value: "ada@example.com" });
     expect(values.has("User.id")).toBe(false);
+  });
+
+  test("collects empty usages and skips empty: false", () => {
+    const document = withMockDirectives(
+      parse(`
+        type User {
+          name: String @backeneko(empty: true)
+          bio: String @mock(empty: false)
+          tags: [String] @mock(value: "x", empty: true)
+        }
+      `),
+    );
+
+    const values = collectFieldDirectives(document);
+    expect(values.get("User.name")).toEqual({ empty: true });
+    expect(values.get("User.tags")).toEqual({ empty: true, value: "x" });
+    expect(values.has("User.bio")).toBe(false);
   });
 });
 
@@ -63,6 +105,7 @@ describe("renderMockValue", () => {
     parse(`
       scalar Custom
       enum Role { ADMIN VIEWER }
+      type Thing { name: String }
       type T {
         s: String
         id: ID
@@ -71,29 +114,37 @@ describe("renderMockValue", () => {
         b: Boolean
         r: Role
         c: Custom
+        nn: Int!
+        bangName: String!
+        thing: Thing
+        tags: [String!]
+        ints: [Int]!
       }
     `),
   );
 
-  const cases: Array<[string, string, boolean, string | null]> = [
-    ["String", "hello", false, '"hello"'],
-    ["ID", "abc", false, '"abc"'],
-    ["Int", "42", false, "42"],
-    ["Float", "3.5", false, "3.5"],
-    ["Boolean", "true", false, "true"],
-    ["Boolean", "false", false, "false"],
-    ["Role", "ADMIN", false, '"ADMIN"'],
-    ["Custom", "anything", false, '"anything"'],
-    ["Int", "abc", false, null],
-    ["Float", "abc", false, null],
-    ["Boolean", "yes", false, null],
-    ["String", "x", true, null],
+  const fields = (schema.getType("T") as GraphQLObjectType).getFields();
+  const shapeOf = (name: string) => fieldShape(fields[name]!.type);
+
+  const valueCases: Array<[string, string, string | null]> = [
+    ["s", "hello", '"hello"'],
+    ["id", "abc", '"abc"'],
+    ["n", "42", "42"],
+    ["f", "3.5", "3.5"],
+    ["b", "true", "true"],
+    ["b", "false", "false"],
+    ["r", "ADMIN", '"ADMIN"'],
+    ["c", "anything", '"anything"'],
+    ["nn", "42", "42"],
+    ["n", "abc", null],
+    ["f", "abc", null],
+    ["b", "yes", null],
+    ["tags", "x", null],
   ];
 
-  for (const [typeName, value, list, expected] of cases) {
-    test(`${typeName} ${JSON.stringify(value)}${list ? " (list)" : ""}`, () => {
-      const type = schema.getType(typeName)!;
-      const result = renderMockValue(value, type, list);
+  for (const [field, value, expected] of valueCases) {
+    test(`${field} ${JSON.stringify(value)}`, () => {
+      const result = renderMockValue({ empty: false, value }, shapeOf(field));
       if (expected === null) {
         expect(result.ok).toBe(false);
       } else {
@@ -101,4 +152,36 @@ describe("renderMockValue", () => {
       }
     });
   }
+
+  const emptyCases: Array<[string, string | null]> = [
+    ["s", '""'],
+    ["id", '""'],
+    ["bangName", '""'],
+    ["tags", "[]"],
+    ["ints", "[]"],
+    ["n", "null"],
+    ["c", "null"],
+    ["r", "null"],
+    ["thing", "null"],
+    ["nn", null],
+  ];
+
+  for (const [field, expected] of emptyCases) {
+    test(`empty ${field}`, () => {
+      const result = renderMockValue({ empty: true }, shapeOf(field));
+      if (expected === null) {
+        expect(result.ok).toBe(false);
+      } else {
+        expect(result).toEqual({ ok: true, expression: expected });
+      }
+    });
+  }
+
+  test("empty: true wins over value and says so", () => {
+    expect(renderMockValue({ empty: true, value: "x" }, shapeOf("s"))).toEqual({
+      ok: true,
+      expression: '""',
+      warning: 'empty: true overrides value: "x"',
+    });
+  });
 });

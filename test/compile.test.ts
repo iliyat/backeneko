@@ -89,7 +89,23 @@ describe("compileDocument", () => {
     expect(result.skipped).toEqual([]);
     expect(result.warnings.some((line) => line.includes("@backeneko"))).toBe(false);
     expect(result.warnings.some((line) => line.includes("@mock"))).toBe(false);
-    expect(print(result.document)).toContain("directive @backeneko(value: String)");
+    expect(print(result.document)).toContain(
+      "directive @backeneko(value: String, empty: Boolean)",
+    );
+  });
+
+  test("completes a user-declared mock directive that lacks the empty argument", () => {
+    const result = compile(`
+      directive @backeneko(value: String) on FIELD_DEFINITION
+      type Query { user: User }
+      type User { name: String @backeneko(empty: true) }
+    `);
+
+    expect(result.skipped).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(
+      Object.keys((result.schema.getType("User") as GraphQLObjectType).getFields()),
+    ).toEqual(["name"]);
   });
 
   test("adds a placeholder Query when none is present", () => {
