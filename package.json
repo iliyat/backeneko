@@ -1,6 +1,6 @@
 {
   "name": "backeneko",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Mock GraphQL backend generated from .graphql schema files, with hot reload",
   "type": "module",
   "repository": {
