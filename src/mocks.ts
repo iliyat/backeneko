@@ -16,6 +16,9 @@ export type MockModule = Record<string, unknown>;
 export interface MockModules {
   entities: Map<string, MockModule>;
   root: Map<string, Map<string, MockModule>>;
+  // Root fields that come from a user-owned `override/<kind>/` file. Only these
+  // are treated as "handled locally" when requests are proxied.
+  overriddenRoot: Map<string, Set<string>>;
 }
 
 // Bundles live inside the workspace, not in the OS temp dir; `watch.ts` skips
@@ -24,8 +27,15 @@ export const BUNDLE_DIR = "cache";
 const MODULE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs"]);
 
 // Where mock files are looked up, most specific first: user overrides, then the
-// generated mirror, then the pre-`generated/` top-level layout of old workspaces.
-const LAYOUTS = [OVERRIDE_DIR, GENERATED_DIR, ""];
+// generated mirror.
+const LAYOUTS = [OVERRIDE_DIR, GENERATED_DIR] as const;
+
+export type MockLayout = (typeof LAYOUTS)[number];
+
+export interface ResolvedMockFile {
+  file: string;
+  layout: MockLayout;
+}
 
 function contentHash(content: string): string {
   const hasher = new Bun.CryptoHasher("sha1");
@@ -81,7 +91,7 @@ async function pruneStaleBundles(name: string, keepDir: string, bundleRoot: stri
 }
 
 export function emptyMockModules(): MockModules {
-  return { entities: new Map(), root: new Map() };
+  return { entities: new Map(), root: new Map(), overriddenRoot: new Map() };
 }
 
 export async function loadMockModules(dir: string, previous?: MockModules): Promise<MockModules> {
@@ -101,28 +111,24 @@ export async function loadMockModules(dir: string, previous?: MockModules): Prom
 
   for (const [typeName, folder] of Object.entries(ROOT_DIRS)) {
     const resolvers = new Map<string, MockModule>();
-    await loadFiles(
-      await resolveMockFiles(dir, folder),
-      bundleRoot,
-      resolvers,
-      previous?.root.get(typeName),
-      tsconfig,
-    );
+    const files = await resolveMockFiles(dir, folder);
+    await loadFiles(files, bundleRoot, resolvers, previous?.root.get(typeName), tsconfig);
     if (resolvers.size > 0) modules.root.set(typeName, resolvers);
-  }
 
-  if (existsSync(path.join(dir, "mocks"))) {
-    await loadLegacyMocks(path.join(dir, "mocks"), bundleRoot, modules, previous, tsconfig);
+    const overridden = new Set<string>();
+    for (const [fieldName, entry] of files) {
+      if (entry.layout === OVERRIDE_DIR) overridden.add(fieldName);
+    }
+    if (overridden.size > 0) modules.overriddenRoot.set(typeName, overridden);
   }
 
   return modules;
 }
 
 // Resolves the file to load for every key, override-first: an `override/` file
-// hides the `generated/` one of the same name, which in turn hides a legacy
-// top-level one.
-async function resolveMockFiles(dir: string, folder: string): Promise<Map<string, string>> {
-  const files = new Map<string, string>();
+// hides the `generated/` one of the same name.
+async function resolveMockFiles(dir: string, folder: string): Promise<Map<string, ResolvedMockFile>> {
+  const files = new Map<string, ResolvedMockFile>();
 
   for (const layout of LAYOUTS) {
     const directory = path.join(dir, layout, folder);
@@ -130,7 +136,7 @@ async function resolveMockFiles(dir: string, folder: string): Promise<Map<string
     for (const entry of await moduleFiles(directory)) {
       const key = path.basename(entry.name, path.extname(entry.name));
       if (files.has(key)) continue;
-      files.set(key, path.join(directory, entry.name));
+      files.set(key, { file: path.join(directory, entry.name), layout });
     }
   }
 
@@ -138,55 +144,22 @@ async function resolveMockFiles(dir: string, folder: string): Promise<Map<string
 }
 
 async function loadFiles(
-  files: Map<string, string>,
+  files: Map<string, ResolvedMockFile>,
   bundleRoot: string,
   target: Map<string, MockModule>,
   previous: Map<string, MockModule> | undefined,
   tsconfig?: string,
 ): Promise<void> {
-  for (const [key, file] of files) {
+  for (const [key, entry] of files) {
     try {
-      target.set(key, await importMockModule(file, bundleRoot, tsconfig));
+      target.set(key, await importMockModule(entry.file, bundleRoot, tsconfig));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[backeneko] failed to load ${path.relative(process.cwd(), file)}: ${message}`);
+      console.error(
+        `[backeneko] failed to load ${path.relative(process.cwd(), entry.file)}: ${message}`,
+      );
       const fallback = previous?.get(key);
       if (fallback) target.set(key, fallback);
-    }
-  }
-}
-
-// Older workspaces used a single `mocks/` directory with one file per type and
-// named exports for root fields. Keep loading them so existing workspaces work.
-async function loadLegacyMocks(
-  directory: string,
-  bundleRoot: string,
-  modules: MockModules,
-  previous?: MockModules,
-  tsconfig?: string,
-): Promise<void> {
-  for (const entry of await moduleFiles(directory)) {
-    const typeName = path.basename(entry.name, path.extname(entry.name));
-    const isRoot = typeName in ROOT_DIRS;
-    try {
-      const module = await importMockModule(path.join(directory, entry.name), bundleRoot, tsconfig);
-      if (isRoot) {
-        if (modules.root.has(typeName)) continue;
-        const resolvers = new Map<string, MockModule>();
-        for (const [fieldName, exported] of Object.entries(module)) {
-          if (fieldName === "default") continue;
-          resolvers.set(fieldName, { default: exported });
-        }
-        modules.root.set(typeName, resolvers);
-      } else {
-        if (modules.entities.has(typeName)) continue;
-        modules.entities.set(typeName, module);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[backeneko] failed to load legacy mock ${entry.name}: ${message}`);
-      const fallback = previous?.entities.get(typeName);
-      if (fallback && !modules.entities.has(typeName)) modules.entities.set(typeName, fallback);
     }
   }
 }

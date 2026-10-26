@@ -40,13 +40,16 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
 | `src/collect.ts` | recursive discovery of `.graphql`/`.gql` files |
 | `src/merge.ts` | merge SDL documents; repeated types → `extend`, `renderSdl` |
 | `src/compile.ts` | tolerant schema build: drop unknown directives, prune broken defs |
-| `src/graphql-internal.ts` | the single deep import of `graphql`'s internal `validateSDL` |
+| `src/graphql/internal.ts` | the single deep import of `graphql`'s internal `validateSDL` |
 | `src/generate.ts` | rewrite `schema.graphql`, `generated/**`, workspace `tsconfig.json` |
 | `src/directives.ts` | `@backeneko`/`@mock` directives: auto-declare, collect field values |
 | `src/mocks.ts` | load mock modules (override-first) with `Bun.build`, `data:`-free cache dirs |
 | `src/resolvers.ts` | build executable schema, attach resolvers, mock fallback |
 | `src/runtime.ts` | mutable shared state (`schema`, `modules`) |
 | `src/server.ts` | `Bun.serve` HTTP: `/graphql` (GET/POST), HTML inspector at `/` |
+| `src/proxy.ts` | `--proxy-to` routing (`local`/`proxy`/`split`), upstream forwarding, result merge |
+| `src/graphql/split.ts` | AST surgery: root field extraction, sub-document building |
+| `src/log.ts` | shared `log`/`warn`/`logError` helpers |
 | `src/watch.ts` | recursive `fs.watch` with debounce (workspace, `--source` tree) |
 
 ### Behavior rules
@@ -61,9 +64,10 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
   (only if generation actually wrote something). `.git`, `node_modules` and
   `dist` are ignored. Generation never exits the process while watching — a
   broken source logs an error and the last good workspace keeps serving.
-- Loading prefers `override/<kind>/<name>.ts` over `generated/<kind>/<name>.ts`
-  over the pre-`generated/` top-level `<kind>/` layout (and the legacy `mocks/`
-  directory last), so a user override always shadows the generated file.
+- Loading prefers `override/<kind>/<name>.ts` over `generated/<kind>/<name>.ts`.
+- `MockModules.overriddenRoot` records the root fields that come from an
+  `override/<kind>/` file. Only those fields are answered locally when the
+  request is proxied; `generated/` files never count as an override.
 - Compilation is **tolerant**: unparseable files, unknown directives, and
   definitions that fail SDL validation are dropped with a warning instead of
   aborting the run. Pruning is field-level where possible; a type is dropped
@@ -73,6 +77,15 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
 - Incoming queries are validated against the schema by default; `--no-validate`
   skips the validation step (unknown fields are then silently dropped). Parsed
   documents are cached by query text, which is schema-independent.
+- With `--proxy-to=<url>` the request is routed by `planRequest()`
+  (`src/proxy.ts`): `local` when every root field of the operation has an
+  override, `proxy` when none has, `split` when only some have — the
+  overridden fields are executed locally, the rest is sent upstream, and both
+  results are merged (`mergeResults`). A document with several operations is
+  routed by `operationName`; without it the document is forwarded as-is and the
+  upstream reports the ambiguity. Only the variables and root keys the
+  forwarded part uses are sent. Interception of the payload is planned but not
+  implemented.
 
 ### Workspace layout and mock contract
 
@@ -91,9 +104,9 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
 
 - Generation emits imports through the workspace path aliases
   (`@entities/Post.ts`, `@queries/...`, ...), whose workspace `tsconfig.json`
-  maps override-first → generated → legacy top-level. Because `Bun.build` is
-  given that tsconfig explicitly, generated relation getters pick up the user's
-  override for the related type without regeneration knowing about it.
+  maps override-first → generated. Because `Bun.build` is given that tsconfig
+  explicitly, generated relation getters pick up the user's override for the
+  related type without regeneration knowing about it.
 - An **entity** file's `default` export is the value used when a field
   resolves to that type (object, array, or a function returning one). A named
   export matching a field name overrides that field's resolver.
@@ -126,8 +139,6 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
   non-null field with no empty value it is ignored with a warning, and it wins
   over `value` (with a warning). Warnings are returned in
   `GenerationResult.warnings` and printed by the CLI.
-- The legacy single `mocks/` directory (one file per type, named exports for
-  root fields) is still loaded if present.
 
 ### Hot reload
 

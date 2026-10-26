@@ -119,12 +119,44 @@ type Product {
 
 ```
 backeneko --source=<dir> [--port=4000] [--dir=.backeneko] [--no-validate]
+          [--proxy-to=<url>] [--proxy-timeout=<ms>]
 ```
 
 - `--source=<dir>` — directory with schema files (recursive).
 - `--port=<n>` — HTTP port (default `4000`).
 - `--dir=<dir>` — workspace directory (default `.backeneko`).
 - `--no-validate` — skip validating incoming queries against the schema.
+- `--proxy-to=<url>` — forward requests to an existing GraphQL backend.
+- `--proxy-timeout=<ms>` — timeout for a proxied request (default `30000`).
+
+## Proxying to a real backend
+
+`--proxy-to=https://api.example.com/graphql` makes backeneko forward requests
+to an existing service instead of answering them from the mocks.
+
+```bash
+backeneko --source=./schemas --proxy-to=https://api.example.com/graphql
+```
+
+- Root fields with an `override/queries/<field>.ts` or
+  `override/mutations/<field>.ts` file are answered **locally**; every other
+  root field is proxied. Adding or removing an override file switches a field
+  between local and proxied without a restart.
+- A query that mixes both is split: the overridden fields are executed against
+  the local mocks, the rest is sent upstream, and the two results are merged
+  into one response.
+- A document with several operations is routed by `operationName`; without it
+  the request is forwarded as-is and the upstream reports the ambiguity.
+- Only the variables the forwarded part uses are sent, and only the root keys
+  the client asked for come back.
+- The upstream receives the client's headers (`authorization`, `cookie`, `x-*`);
+  hop-by-hop headers are dropped. Requests are normalized to `POST` with a JSON
+  body.
+- Each proxied request is logged: `[backeneko] proxied → <url> (200, 14ms)`.
+  An unreachable upstream answers `502` with the reason.
+
+Request interception (rewriting the payload before it is sent and the response
+after it arrives) is planned, not implemented yet.
 
 ## Development
 

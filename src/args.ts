@@ -5,11 +5,14 @@ export interface CliOptions {
   port: number;
   dir: string;
   validate: boolean;
+  proxyTo: string | null;
+  proxyTimeout: number;
   help: boolean;
 }
 
 export const DEFAULT_PORT = 4000;
 export const DEFAULT_WORKSPACE_DIR = ".backeneko";
+export const DEFAULT_PROXY_TIMEOUT_MS = 30_000;
 
 export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions {
   const { values } = parseArgs({
@@ -19,6 +22,8 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions
       port: { type: "string" },
       dir: { type: "string" },
       "no-validate": { type: "boolean" },
+      "proxy-to": { type: "string" },
+      "proxy-timeout": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
     allowPositionals: true,
@@ -30,13 +35,36 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions
     throw new Error(`invalid --port value: ${values.port}`);
   }
 
+  const proxyTimeout =
+    values["proxy-timeout"] === undefined
+      ? DEFAULT_PROXY_TIMEOUT_MS
+      : Number(values["proxy-timeout"]);
+  if (!Number.isInteger(proxyTimeout) || proxyTimeout < 1) {
+    throw new Error(`invalid --proxy-timeout value: ${values["proxy-timeout"]}`);
+  }
+
   return {
     source: values.source ?? null,
     port,
     dir: values.dir ?? DEFAULT_WORKSPACE_DIR,
     validate: !(values["no-validate"] ?? false),
+    proxyTo: values["proxy-to"] === undefined ? null : parseProxyTarget(values["proxy-to"]),
+    proxyTimeout,
     help: values.help ?? false,
   };
+}
+
+function parseProxyTarget(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`invalid --proxy-to value: ${value}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`--proxy-to must be an http(s) URL: ${value}`);
+  }
+  return url.toString();
 }
 
 export function printHelp(): void {
@@ -52,6 +80,11 @@ Options:
   --port=<n>       HTTP port (default: ${DEFAULT_PORT})
   --dir=<dir>      Workspace directory (default: ${DEFAULT_WORKSPACE_DIR})
   --no-validate    Skip validating queries against the schema (default: validate)
+  --proxy-to=<url> Forward requests to an existing GraphQL backend. Root fields
+                   with an override/queries|mutations file are answered locally,
+                   everything else is proxied.
+  --proxy-timeout=<ms>
+                   Timeout for a proxied request (default: ${DEFAULT_PROXY_TIMEOUT_MS})
   -h, --help       Show this help
 
 Behavior:

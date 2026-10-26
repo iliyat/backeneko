@@ -123,7 +123,7 @@ describe("generateWorkspace", () => {
     expect(result.removed).toEqual([]);
   });
 
-  test("aliases entities to override, then generated, then legacy layout", async () => {
+  test("aliases entities to override, then generated", async () => {
     await generateWorkspace({ targetDir: dir, sdl: SDL });
 
     const config = JSON.parse(await readFile(path.join(dir, "tsconfig.json"), "utf8"));
@@ -133,7 +133,6 @@ describe("generateWorkspace", () => {
     expect(config.compilerOptions.paths["@entities/*"]).toEqual([
       "override/entities/*",
       "generated/entities/*",
-      "entities/*",
     ]);
   });
 
@@ -442,12 +441,18 @@ describe("mock directives", () => {
 });
 
 describe("mock loading", () => {
-  test("still loads the pre-generated top-level layout", async () => {
-    await mkdir(path.join(dir, "entities"), { recursive: true });
-    await writeFile(path.join(dir, "entities", "User.ts"), "export default { id: 'legacy' };\n", "utf8");
+  test("tracks root fields that come from an override file", async () => {
+    await generateWorkspace({ targetDir: dir, sdl: SDL });
+    await mkdir(path.join(dir, "override", "queries"), { recursive: true });
+    await writeFile(
+      path.join(dir, "override", "queries", "users.ts"),
+      "export default () => [];\n",
+      "utf8",
+    );
 
     const modules = await loadMockModules(dir);
 
-    expect(modules.entities.get("User")?.default).toEqual({ id: "legacy" });
+    expect(modules.overriddenRoot.get("Query")).toEqual(new Set(["users"]));
+    expect(modules.overriddenRoot.get("Mutation")).toBeUndefined();
   });
 });
