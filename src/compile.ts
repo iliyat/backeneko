@@ -9,7 +9,7 @@ import {
   type DocumentNode,
   type GraphQLSchema,
 } from "graphql";
-import { validateSDL } from "./graphql-internal.ts";
+import { validateSDL } from "./graphql/internal.ts";
 import { withMockDirectives } from "./directives.ts";
 import type { SkippedDefinition } from "./merge.ts";
 

@@ -18,32 +18,10 @@ import { buildExecutableSchema } from "./resolvers.ts";
 import { runtime } from "./runtime.ts";
 import { startServer } from "./server.ts";
 import { watchTree } from "./watch.ts";
-
-function colorEnabled(stream: { isTTY?: boolean }): boolean {
-  if (process.env.NO_COLOR) return false;
-  const force = process.env.FORCE_COLOR;
-  if (force !== undefined && force !== "" && force !== "0") return true;
-  return Boolean(stream.isTTY);
-}
-
-function paint(stream: { isTTY?: boolean }, code: string, text: string): string {
-  return colorEnabled(stream) ? `\u001b[${code}m${text}\u001b[0m` : text;
-}
-
-function log(message: string): void {
-  console.log(`[backeneko] ${message}`);
-}
-
-function warn(message: string): void {
-  console.warn(paint(process.stderr, "1;33", `[backeneko] warning: ${message}`));
-}
-
-function logError(message: string): void {
-  console.error(paint(process.stderr, "1;31", `[backeneko] error: ${message}`));
-}
+import { log, logError, paint, warn } from "./log.ts";
 
 function fail(message: string): never {
-  console.error(paint(process.stderr, "1;31", `[backeneko] error: ${message}`));
+  logError(message);
   process.exit(1);
 }
 
@@ -119,8 +97,14 @@ async function main(): Promise<void> {
   runtime.modules = await loadMockModules(targetDir);
   await logSummary(targetDir);
 
-  const server = startServer(options.port, { validate: options.validate });
+  const server = startServer(options.port, {
+    validate: options.validate,
+    proxy: options.proxyTo
+      ? { target: options.proxyTo, timeoutMs: options.proxyTimeout }
+      : null,
+  });
   log(`mock GraphQL backend on http://localhost:${server.port}/graphql`);
+  if (options.proxyTo) logProxyMode(options.proxyTo);
   if (!options.validate) warn("query validation disabled");
   log(`hot reload watching ${path.relative(cwd, targetDir)}`);
 
@@ -273,6 +257,19 @@ async function countFiles(directory: string): Promise<number> {
     else count += 1;
   }
   return count;
+}
+
+function logProxyMode(target: string): void {
+  log(`proxy mode: forwarding to ${target}`);
+  const local: string[] = [];
+  for (const [typeName, fields] of runtime.modules.overriddenRoot) {
+    for (const field of fields) local.push(`${typeName}.${field}`);
+  }
+  if (local.length > 0) {
+    log(`answered locally (override present): ${local.sort().join(", ")}`);
+  } else {
+    log("no override/queries or override/mutations files — everything is proxied");
+  }
 }
 
 async function loadSchema(schemaPath: string): Promise<void> {

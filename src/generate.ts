@@ -57,9 +57,9 @@ export interface GenerationResult {
   warnings: string[];
 }
 
-// The workspace tsconfig maps `@<dir>/<name>` to override-first, generated-second
-// and legacy top-level-third, so imported entities pick up user overrides
-// without regeneration knowing anything about them. `allowImportingTsExtensions`
+// The workspace tsconfig maps `@<dir>/<name>` to override-first and
+// generated-second, so imported entities pick up user overrides without
+// regeneration knowing anything about them. `allowImportingTsExtensions`
 // (with `noEmit`) keeps editors happy about the `.ts` import specifiers Bun emits.
 export function workspaceTsconfig(): string {
   const paths: Record<string, string[]> = {};
@@ -67,7 +67,6 @@ export function workspaceTsconfig(): string {
     paths[`@${dir}/*`] = [
       path.join(OVERRIDE_DIR, dir, "*"),
       path.join(GENERATED_DIR, dir, "*"),
-      path.join(dir, "*"),
     ];
   }
   const compilerOptions = {

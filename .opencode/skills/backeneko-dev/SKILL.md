@@ -39,8 +39,15 @@ of GraphQL schemas and serves it as a mock GraphQL backend.
 - **generated/ vs override/:** `generateWorkspace` rewrites `generated/**`
   (write-if-changed) and prunes files whose type/field left the schema; it must
   never touch `override/**`. The loader in `src/mocks.ts` resolves
-  `override/<kind>/<name>.ts` first, then `generated/<kind>/<name>.ts`, then the
-  legacy top-level `<kind>/` layout, then the legacy `mocks/` directory.
+  `override/<kind>/<name>.ts` first, then `generated/<kind>/<name>.ts`.
+  `MockModules.overriddenRoot` lists the root fields that come from an
+  `override/` file — only those are answered locally when the request is
+  proxied.
+- **Proxying:** `--proxy-to=<url>` routes a request in `src/proxy.ts`:
+  `local` (every root field has an override), `proxy` (none has) or `split`
+  (some have — the overridden fields run locally, the rest is forwarded and the
+  results are merged). `src/graphql/split.ts` does the AST surgery; only the
+  variables and root keys the forwarded part uses are sent upstream.
 - **Path aliases:** generation emits `@entities/...` (etc.) imports and writes a
   `.backeneko/tsconfig.json` mapping each alias to
   `override/<dir>/*`, `generated/<dir>/*`, `<dir>/*`, plus

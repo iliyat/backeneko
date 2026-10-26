@@ -1,4 +1,14 @@
-import { GraphQLError, execute, parse, validate, type DocumentNode } from "graphql";
+import { GraphQLError, execute, parse, print, validate, type DocumentNode } from "graphql";
+import { log } from "./log.ts";
+import {
+  forwardToUpstream,
+  mergeResults,
+  pickVariables,
+  planRequest,
+  readUpstreamResult,
+  type ProxyOptions,
+  type UpstreamResult,
+} from "./proxy.ts";
 import { runtime } from "./runtime.ts";
 
 export interface ServerHandle {
@@ -8,6 +18,7 @@ export interface ServerHandle {
 
 export interface ServerOptions {
   validate?: boolean;
+  proxy?: ProxyOptions | null;
 }
 
 // Parsing depends only on the query text, so this survives schema reloads.
@@ -44,7 +55,7 @@ export function startServer(port: number, options: ServerOptions = {}): ServerHa
   const validateQueries = options.validate ?? true;
   const server = Bun.serve({
     port,
-    fetch: (request) => handleRequest(request, validateQueries),
+    fetch: (request) => handleRequest(request, validateQueries, options.proxy ?? null),
   });
   return {
     port: server.port ?? port,
@@ -54,7 +65,11 @@ export function startServer(port: number, options: ServerOptions = {}): ServerHa
   };
 }
 
-async function handleRequest(request: Request, validateQueries: boolean): Promise<Response> {
+async function handleRequest(
+  request: Request,
+  validateQueries: boolean,
+  proxy: ProxyOptions | null,
+): Promise<Response> {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -74,16 +89,21 @@ async function handleRequest(request: Request, validateQueries: boolean): Promis
   const payload = await readGraphQLRequest(request, url);
   if ("error" in payload) return json({ errors: [{ message: payload.error }] }, 400);
 
-  const schema = runtime.schema;
-  if (!schema) {
-    return json({ errors: [{ message: "schema is not loaded yet" }] }, 503);
-  }
-
   let document: DocumentNode;
   try {
     document = parseCached(payload.query);
   } catch (error) {
     return json({ errors: [errorEntry(error)] });
+  }
+
+  if (proxy) {
+    const routed = await handleProxiedRequest(request, payload, document, proxy, validateQueries);
+    if (routed) return routed;
+  }
+
+  const schema = runtime.schema;
+  if (!schema) {
+    return json({ errors: [{ message: "schema is not loaded yet" }] }, 503);
   }
 
   try {
@@ -102,6 +122,98 @@ async function handleRequest(request: Request, validateQueries: boolean): Promis
   } catch (error) {
     return json({ errors: [errorEntry(error)] }, 500);
   }
+}
+
+// Returns null when the request is handled locally, so the caller falls back to
+// the regular mock execution.
+async function handleProxiedRequest(
+  request: Request,
+  payload: GraphQLRequestPayload,
+  document: DocumentNode,
+  proxy: ProxyOptions,
+  validateQueries: boolean,
+): Promise<Response | null> {
+  const plan = planRequest({
+    document,
+    operationName: payload.operationName,
+    schema: runtime.schema,
+    overriddenRoot: runtime.modules.overriddenRoot,
+  });
+
+  if (plan.mode === "error") {
+    return json({ errors: [{ message: plan.error }] }, 400);
+  }
+
+  if (plan.mode === "local") return null;
+
+  if (plan.mode === "proxy") {
+    const outcome = await forwardToUpstream(
+      proxy,
+      {
+        query: payload.query,
+        variables: payload.variables,
+        operationName: payload.operationName,
+      },
+      request.headers,
+    );
+    if (!outcome.ok) {
+      log(`proxy failed → ${proxy.target} (${outcome.status}, ${outcome.durationMs}ms)`);
+      return json({ errors: [{ message: `proxy request failed: ${outcome.message}` }] }, outcome.status);
+    }
+    log(`proxied → ${proxy.target} (${outcome.status}, ${outcome.durationMs}ms)`);
+    return json(outcome.result, outcome.status);
+  }
+
+  const remoteOutcome = await forwardToUpstream(
+    proxy,
+    {
+      query: print(plan.remoteDocument),
+      variables: pickVariables(payload.variables, plan.remoteVariables),
+      operationName: payload.operationName,
+    },
+    request.headers,
+  );
+  if (!remoteOutcome.ok) {
+    log(`proxy failed → ${proxy.target} (${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
+    return json(
+      { errors: [{ message: `proxy request failed: ${remoteOutcome.message}` }] },
+      remoteOutcome.status,
+    );
+  }
+  log(`proxied → ${proxy.target} (${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
+
+  const local = await executeLocal(
+    plan.localDocument,
+    payload.variables,
+    plan.localVariables,
+    validateQueries,
+  );
+  const remote = readUpstreamResult(remoteOutcome.result);
+  const merged = mergeResults(local, remote, plan.order, plan.localKeys, plan.remoteKeys);
+  return json(merged);
+}
+
+async function executeLocal(
+  document: DocumentNode,
+  variables: unknown,
+  names: string[] | undefined,
+  validateQueries: boolean,
+): Promise<UpstreamResult> {
+  const schema = runtime.schema;
+  if (!schema) return { errors: [new GraphQLError("schema is not loaded yet")] };
+
+  if (validateQueries) {
+    const validationErrors = validate(schema, document);
+    if (validationErrors.length > 0) return { errors: validationErrors };
+  }
+
+  const result = await execute({
+    schema,
+    document,
+    variableValues: pickVariables(variables, names) as never,
+    contextValue: {},
+  });
+  return { data: result.data, errors: result.errors, extensions: result.extensions };
 }
 
 interface GraphQLRequestPayload {
