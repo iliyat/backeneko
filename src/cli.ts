@@ -223,11 +223,10 @@ async function regenerate(sourceDir: string, targetDir: string): Promise<Generat
     log(`collected ${files.length} schema file(s) from ${sourceDir}`);
     log(`generated ${path.basename(result.schemaPath)}`);
     log(
-      `${GENERATED_DIR}/: ${result.created.length} created, ${result.updated.length} updated, ` +
+      `file(s) in "/${GENERATED_DIR}" directory: ${result.created.length} created, ${result.updated.length} updated, ` +
         `${result.unchanged.length} unchanged, ${result.removed.length} removed`,
     );
     if (result.removed.length > 0) log(`pruned ${result.removed.join(", ")}`);
-    log(`${OVERRIDE_DIR}/ is never written`);
     return result;
   } catch (error) {
     logError(`regeneration failed: ${error instanceof Error ? error.message : error}`);

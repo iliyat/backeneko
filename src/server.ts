@@ -1,4 +1,12 @@
-import { GraphQLError, execute, parse, print, validate, type DocumentNode } from "graphql";
+import {
+  GraphQLError,
+  execute,
+  getOperationAST,
+  parse,
+  print,
+  validate,
+  type DocumentNode,
+} from "graphql";
 import { log } from "./log.ts";
 import {
   forwardToUpstream,
@@ -146,6 +154,8 @@ async function handleProxiedRequest(
 
   if (plan.mode === "local") return null;
 
+  const label = operationLabel(document, payload.operationName);
+
   if (plan.mode === "proxy") {
     const outcome = await forwardToUpstream(
       proxy,
@@ -157,10 +167,10 @@ async function handleProxiedRequest(
       request.headers,
     );
     if (!outcome.ok) {
-      log(`proxy failed → ${proxy.target} (${outcome.status}, ${outcome.durationMs}ms)`);
+      log(`proxy failed → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)`);
       return json({ errors: [{ message: `proxy request failed: ${outcome.message}` }] }, outcome.status);
     }
-    log(`proxied → ${proxy.target} (${outcome.status}, ${outcome.durationMs}ms)`);
+    log(`proxied → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)`);
     return json(outcome.result, outcome.status);
   }
 
@@ -174,13 +184,13 @@ async function handleProxiedRequest(
     request.headers,
   );
   if (!remoteOutcome.ok) {
-    log(`proxy failed → ${proxy.target} (${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
+    log(`proxy failed → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
     return json(
       { errors: [{ message: `proxy request failed: ${remoteOutcome.message}` }] },
       remoteOutcome.status,
     );
   }
-  log(`proxied → ${proxy.target} (${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
+  log(`proxied → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
 
   const local = await executeLocal(
     plan.localDocument,
@@ -191,6 +201,13 @@ async function handleProxiedRequest(
   const remote = readUpstreamResult(remoteOutcome.result);
   const merged = mergeResults(local, remote, plan.order, plan.localKeys, plan.remoteKeys);
   return json(merged);
+}
+
+function operationLabel(document: DocumentNode, operationName: string | null | undefined): string {
+  if (operationName) return operationName;
+  const operation = getOperationAST(document);
+  if (!operation) return "<multiple operations>";
+  return operation.name?.value ?? "<anonymous>";
 }
 
 async function executeLocal(
