@@ -85,7 +85,7 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
   routed by `operationName`; without it the document is forwarded as-is and the
   upstream reports the ambiguity. Only the variables and root keys the
   forwarded part uses are sent. Interception of the payload is planned but not
-  implemented — see `docs/interceptors.md`.
+  implemented.
 
 ### Workspace layout and mock contract
 

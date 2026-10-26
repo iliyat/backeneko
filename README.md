@@ -156,8 +156,7 @@ backeneko --source=./schemas --proxy-to=https://api.example.com/graphql
   An unreachable upstream answers `502` with the reason.
 
 Request interception (rewriting the payload before it is sent and the response
-after it arrives) is planned, not implemented yet — see
-[docs/interceptors.md](docs/interceptors.md).
+after it arrives) is planned, not implemented yet.
 
 ## Development
 
