@@ -158,8 +158,8 @@ Changing `schema.graphql` rebuilds the schema.
 ## Conventions
 
 - TypeScript strict, ESM, `.ts` import specifiers (see `tsconfig.json`).
-- Only runtime dependency is `graphql`; prefer the Bun standard library over
-  new packages.
+- Runtime dependencies are `graphql` and `commander`; prefer the Bun standard
+  library over new packages.
 - No comments in source unless they explain a non-obvious constraint.
 - Keep functions small and pure where possible; IO lives in `cli.ts` /
   `server.ts` / `watch.ts`.

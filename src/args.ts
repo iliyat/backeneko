@@ -1,4 +1,4 @@
-import { parseArgs } from "node:util";
+import { Command } from "commander";
 
 export interface CliOptions {
   source: string | null;
@@ -14,44 +14,95 @@ export const DEFAULT_PORT = 4000;
 export const DEFAULT_WORKSPACE_DIR = ".backeneko";
 export const DEFAULT_PROXY_TIMEOUT_MS = 30_000;
 
+interface RawCliOptions {
+  source?: string;
+  port: number;
+  dir?: string;
+  validate: boolean;
+  proxyTo?: string;
+  proxyTimeout: number;
+  help?: boolean;
+}
+
+function createProgram(): Command {
+  return new Command()
+    .name("backeneko")
+    .description("backeneko — mock GraphQL backend generated from .graphql schema files")
+    .usage("[--source=<schema-directory>] [options]")
+    .helpOption(false)
+    .exitOverride()
+    .configureOutput({ writeErr: () => {} })
+    .allowExcessArguments(true)
+    .option(
+      "--source <dir>",
+      "Directory with .graphql/.gql schema files. Regenerates the workspace: " +
+        "overwrites schema.graphql and everything under generated/, leaves override/ alone. " +
+        "Omit to serve <dir> as-is.",
+    )
+    .option("--port <n>", "HTTP port", parsePort, DEFAULT_PORT)
+    .option("--dir <dir>", `Workspace directory (default: ${DEFAULT_WORKSPACE_DIR})`)
+    .option("--no-validate", "Skip validating queries against the schema (default: validate)")
+    .option(
+      "--proxy-to <url>",
+      "Forward requests to an existing GraphQL backend. Root fields with an " +
+        "override/queries|mutations file are answered locally, everything else is proxied.",
+      parseProxyTarget,
+    )
+    .option(
+      "--proxy-timeout <ms>",
+      "Timeout for a proxied request",
+      parseProxyTimeout,
+      DEFAULT_PROXY_TIMEOUT_MS,
+    )
+    .option("-h, --help", "Show this help")
+    .addHelpText(
+      "after",
+      `
+Behavior:
+  * with --source: schema.graphql and generated/ are rewritten on every start,
+    including files whose type or field disappeared from the schema; a broken
+    source logs an error and the last good workspace keeps serving
+  * the source directory is watched — editing, adding or removing .graphql/.gql
+    files regenerates the workspace and hot-reloads the schema and mocks
+    (.git, node_modules and dist are ignored)
+  * override/entities|queries|mutations|subscriptions/<name>.ts wins over
+    generated/<same path>; overrides are loaded, never written or removed
+  * without --source: an existing <dir> is served unchanged; if <dir> does not
+    exist, --source is required
+  * with --proxy-to: mixed operations are split — overridden root fields run
+    locally, the rest is forwarded upstream, and the results are merged
+  * mock files and schema hot-reload on change`,
+    );
+}
+
 export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions {
-  const { values } = parseArgs({
-    args: argv,
-    options: {
-      source: { type: "string" },
-      port: { type: "string" },
-      dir: { type: "string" },
-      "no-validate": { type: "boolean" },
-      "proxy-to": { type: "string" },
-      "proxy-timeout": { type: "string" },
-      help: { type: "boolean", short: "h" },
-    },
-    allowPositionals: true,
-    strict: true,
-  });
-
-  const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`invalid --port value: ${values.port}`);
-  }
-
-  const proxyTimeout =
-    values["proxy-timeout"] === undefined
-      ? DEFAULT_PROXY_TIMEOUT_MS
-      : Number(values["proxy-timeout"]);
-  if (!Number.isInteger(proxyTimeout) || proxyTimeout < 1) {
-    throw new Error(`invalid --proxy-timeout value: ${values["proxy-timeout"]}`);
-  }
+  const options = createProgram().parse(argv, { from: "user" }).opts<RawCliOptions>();
 
   return {
-    source: values.source ?? null,
-    port,
-    dir: values.dir ?? DEFAULT_WORKSPACE_DIR,
-    validate: !(values["no-validate"] ?? false),
-    proxyTo: values["proxy-to"] === undefined ? null : parseProxyTarget(values["proxy-to"]),
-    proxyTimeout,
-    help: values.help ?? false,
+    source: options.source ?? null,
+    port: options.port,
+    dir: options.dir ?? DEFAULT_WORKSPACE_DIR,
+    validate: options.validate,
+    proxyTo: options.proxyTo ?? null,
+    proxyTimeout: options.proxyTimeout,
+    help: options.help ?? false,
   };
+}
+
+function parsePort(value: string): number {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`invalid --port value: ${value}`);
+  }
+  return port;
+}
+
+function parseProxyTimeout(value: string): number {
+  const timeout = Number(value);
+  if (!Number.isInteger(timeout) || timeout < 1) {
+    throw new Error(`invalid --proxy-timeout value: ${value}`);
+  }
+  return timeout;
 }
 
 function parseProxyTarget(value: string): string {
@@ -68,33 +119,5 @@ function parseProxyTarget(value: string): string {
 }
 
 export function printHelp(): void {
-  console.log(`backeneko — mock GraphQL backend generated from .graphql schema files
-
-Usage:
-  backeneko [--source=<schema-directory>] [options]
-
-Options:
-  --source=<dir>   Directory with .graphql/.gql schema files. Regenerates the
-                   workspace: overwrites schema.graphql and everything under
-                   generated/, leaves override/ alone. Omit to serve <dir> as-is.
-  --port=<n>       HTTP port (default: ${DEFAULT_PORT})
-  --dir=<dir>      Workspace directory (default: ${DEFAULT_WORKSPACE_DIR})
-  --no-validate    Skip validating queries against the schema (default: validate)
-  --proxy-to=<url> Forward requests to an existing GraphQL backend. Root fields
-                   with an override/queries|mutations file are answered locally,
-                   everything else is proxied.
-  --proxy-timeout=<ms>
-                   Timeout for a proxied request (default: ${DEFAULT_PROXY_TIMEOUT_MS})
-  -h, --help       Show this help
-
-Behavior:
-  * with --source: schema.graphql and generated/ are rewritten on every start,
-    including files whose type or field disappeared from the schema, and the
-    source directory is watched — editing, adding or removing .graphql/.gql
-    files regenerates the workspace and hot-reloads the schema and mocks
-    (.git, node_modules and dist are ignored)
-  * override/entities|queries|mutations|subscriptions/<name>.ts wins over
-    generated/<same path>; overrides are loaded, never written or removed
-  * without --source: an existing <dir> is served unchanged
-  * mock files and schema hot-reload on change`);
+  createProgram().outputHelp();
 }
