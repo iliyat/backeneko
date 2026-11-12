@@ -42,6 +42,7 @@
     "prepublishOnly": "bun run typecheck && bun test"
   },
   "dependencies": {
+    "commander": "^15.1.0",
     "graphql": "^16.11.0"
   },
   "devDependencies": {
