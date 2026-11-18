@@ -155,8 +155,83 @@ backeneko --source=./schemas --proxy-to=https://api.example.com/graphql
 - Each proxied request is logged: `[backeneko] proxied → <url> (200, 14ms)`.
   An unreachable upstream answers `502` with the reason.
 
-Request interception (rewriting the payload before it is sent and the response
-after it arrives) is planned, not implemented yet.
+## Request interception
+
+Interceptors rewrite the payload before it is sent and the response after it
+arrives. They live in the user-owned `.backeneko/intercept/` directory next to
+`override/`; the generator never touches it.
+
+```
+.backeneko/intercept/
+├── queries/<field>.ts          # one root field of a Query
+├── mutations/<field>.ts        # one root field of a Mutation
+└── operations/<name>.ts        # a whole operation (default.ts when unnamed)
+```
+
+A file is a plain TypeScript module with optional exports:
+
+```ts
+export function before(payload: ProxyPayload, ctx: InterceptContext): ProxyPayload {
+  return { ...payload, variables: { ...payload.variables, limit: 10 } };
+}
+
+export function after(result: InterceptResult, ctx: InterceptContext): InterceptResult {
+  return { ...result, data: { ...result.data, users: [] } };
+}
+
+export function match(ctx: InterceptContext): boolean {
+  return ctx.variables?.tier === "gold" && ctx.query.includes("preview");
+}
+```
+
+- `match` gets the same context as the hooks, including `query` and `variables`
+  (for a split part — that part's sub-document and picked variables). It runs
+  once per part before `before`, and gates both `before` and `after` of that
+  interceptor: a request that does not match is handled untouched.
+- `before` runs outside-in (field interceptors in operation order, then the
+  operation one); `after` runs inside-out, so an operation interceptor wraps the
+  whole response.
+- In a split request each part runs only its own field interceptors; the
+  operation interceptor runs once around both.
+- A local route (an override, or `mode: "local"`) executes an already parsed
+  document, so `before` can change only `variables` there; `query` and
+  `operationName` changes are ignored with a warning. In a fully proxied request
+  all three fields can be rewritten.
+- A thrown hook, or one returning a non-object, is logged as a warning and
+  ignored — the request continues with the unchanged payload/result.
+- Interceptors also apply without `--proxy-to`, on the plain local route.
+- The context also exposes `operationName`, `operationType`, `rootFields` (field
+  names without aliases), `route` (`local`/`remote`/`split`), `target` (upstream
+  URL), `rootField` (for field files) and `file` (interceptor path).
+- Files match the schema field name; operations match `operationName` from the
+  request or, when it is omitted, the single operation's name in the document.
+  `operations/default.ts` handles an unnamed operation.
+
+`intercept/operations/<name>.ts` additionally exports `mode` to override the
+per-field routing of the whole operation:
+
+| mode | behavior |
+| --- | --- |
+| `auto` (default) | overridden fields are local, the rest is proxied/split |
+| `proxy` | the whole operation goes upstream, overrides are ignored |
+| `local` | the whole operation is executed locally, even without overrides |
+
+`mode` is only read from `operations/`; in a field file it is ignored with a
+warning. A file without `mode` is just an interceptor and does not change
+routing.
+
+Adding, changing or removing an `intercept/` file reloads the interceptors
+without a restart. The generated `.backeneko/intercept.d.ts` declares
+`ProxyPayload`, `InterceptContext`, `InterceptResult`, `InterceptRoute` and
+`InterceptMode` globally, so intercept files need no imports; `@intercept/*`
+resolves inside the workspace.
+
+### Known limitations
+
+- `mode` on field files (`intercept/queries|mutations/<field>.ts`) is not
+  supported yet.
+- `intercept/subscriptions/` is not supported until the server gets an SSE/WS
+  transport.
 
 ## Development
 

@@ -3,7 +3,8 @@
 Статус: **не реализовано**. Выбран вариант C из обсуждения: не резать запрос по
 entity-полям, а исполнять ответ апстрима локально.
 
-Связанные документы: `interceptors.md` (перехват пейлоада, независимый слой).
+Связанные документы: README → «Request interception» (перехват пейлоада,
+независимый слой).
 
 ## Проблема
 
@@ -130,13 +131,13 @@ interface RequestContext {
 
 | Файл | Изменение |
 | --- | --- |
-| `src/mocks.ts` | `MockModules.overriddenEntities: Map<string, Set<string>>` — named exports из `override/entities/` (только layout `override`). |
-| `src/graphql/split.ts` | `usesEntityOverride(...)`, `stripEntityOverrides(...)` (best-effort, консервативно), переиспользование фильтрации переменных/фрагментов. |
-| `src/proxy.ts` | `RoutePlan` + `hydrate`; `planRequest` возвращает `remoteKeys`/`order`; при отсутствии схемы — откат к текущему поведению. |
-| `src/resolvers.ts` | root-резолвер сначала смотрит в `context.remoteRoots`; `mockFallback` не срабатывает для parent из `context.remoteValues`. |
-| `src/server.ts` | ветка `hydrate`: forward → `execute(originalDocument, ctx)` → слияние `errors`/`extensions`. |
+| `src/workspace/mocks.ts` | `MockModules.overriddenEntities: Map<string, Set<string>>` — named exports из `override/entities/` (только layout `override`). |
+| `src/request/split.ts` | `usesEntityOverride(...)`, `stripEntityOverrides(...)` (best-effort, консервативно), переиспользование фильтрации переменных/фрагментов. |
+| `src/request/proxy.ts` | `RoutePlan` + `hydrate`; `planRequest` возвращает `remoteKeys`/`order`; при отсутствии схемы — откат к текущему поведению. |
+| `src/schema/resolvers.ts` | root-резолвер сначала смотрит в `context.remoteRoots`; `mockFallback` не срабатывает для parent из `context.remoteValues`. |
+| `src/request/server.ts` | ветка `hydrate`: forward → `execute(originalDocument, ctx)` → слияние `errors`/`extensions`. |
 | `src/runtime.ts` | без изменений. |
-| `src/generate.ts` | без изменений; при необходимости позже — `override.d.ts` для типов контекста. |
+| `src/workspace/generate.ts` | без изменений; при необходимости позже — `override.d.ts` для типов контекста. |
 | `test/proxy.test.ts`, `test/server.test.ts`, `test/resolvers.test.ts` | новые сценарии. |
 | `README.md`, `AGENTS.md` | описать поведение после реализации. |
 
@@ -224,7 +225,7 @@ return (parent, args, context, info) => {
   (длина списка/существование объекта всё равно приходят из апстрима). Для
   этого есть root-override.
 - Синтетические root-поля и deep import внутренностей `graphql`.
-- Перехватчики пейлоада — см. `interceptors.md`; при реализации `after`
+- Перехватчики пейлоада — см. README → «Request interception»; при реализации `after`
   применяется уже к гидратированному результату.
 
 ## Открытые вопросы

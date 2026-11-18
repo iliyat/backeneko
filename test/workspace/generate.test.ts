@@ -4,10 +4,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { graphql } from "graphql";
-import { generateWorkspace } from "../src/generate.ts";
-import { emptyMockModules, loadMockModules } from "../src/mocks.ts";
-import { buildExecutableSchema } from "../src/resolvers.ts";
-import { runtime } from "../src/runtime.ts";
+import { generateWorkspace } from "../../src/workspace/generate.ts";
+import { emptyMockModules, loadMockModules } from "../../src/workspace/mocks.ts";
+import { buildExecutableSchema } from "../../src/schema/resolvers.ts";
+import { runtime } from "../../src/runtime.ts";
 
 const SDL = `
 type Query {
@@ -134,6 +134,18 @@ describe("generateWorkspace", () => {
       "override/entities/*",
       "generated/entities/*",
     ]);
+  });
+
+  test("writes intercept types and aliases the intercept directory", async () => {
+    await generateWorkspace({ targetDir: dir, sdl: SDL });
+
+    const config = JSON.parse(await readFile(path.join(dir, "tsconfig.json"), "utf8"));
+    expect(config.compilerOptions.paths["@intercept/*"]).toEqual(["intercept/*"]);
+
+    const declarations = await readFile(path.join(dir, "intercept.d.ts"), "utf8");
+    expect(declarations).toContain("interface ProxyPayload");
+    expect(declarations).toContain("interface InterceptContext");
+    expect(declarations).toContain("interface InterceptResult");
   });
 
   test("fills entity mock values based on field types", async () => {

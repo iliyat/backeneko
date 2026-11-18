@@ -22,7 +22,11 @@ import {
   renderMockValue,
   withMockDirectives,
   type MockDirectiveUsage,
-} from "./directives.ts";
+} from "../schema/directives.ts";
+import {
+  INTERCEPT_DECLARATIONS_FILE,
+  interceptDeclarations,
+} from "../request/intercept-declarations.ts";
 
 export const ENTITY_DIR = "entities";
 export const ROOT_DIRS = {
@@ -36,6 +40,7 @@ export const ROOT_DIRS = {
 // an override file wins over the generated one of the same name.
 export const GENERATED_DIR = "generated";
 export const OVERRIDE_DIR = "override";
+export const INTERCEPT_DIR = "intercept";
 export const TSCONFIG_FILE = "tsconfig.json";
 
 export const MOCK_DIRS = [ENTITY_DIR, ...Object.values(ROOT_DIRS)];
@@ -69,6 +74,7 @@ export function workspaceTsconfig(): string {
       path.join(GENERATED_DIR, dir, "*"),
     ];
   }
+  paths[`@${INTERCEPT_DIR}/*`] = [path.join(INTERCEPT_DIR, "*")];
   const compilerOptions = {
     baseUrl: ".",
     paths,
@@ -91,6 +97,17 @@ export async function ensureWorkspaceTsconfig(targetDir: string): Promise<boolea
   return true;
 }
 
+export async function ensureWorkspaceFiles(targetDir: string): Promise<boolean> {
+  const tsconfigChanged = await ensureWorkspaceTsconfig(targetDir);
+  const file = path.join(targetDir, INTERCEPT_DECLARATIONS_FILE);
+  const content = interceptDeclarations();
+  const existing = await readFile(file, "utf8").catch(() => null);
+  if (existing === content) return tsconfigChanged;
+  await mkdir(targetDir, { recursive: true });
+  await writeFile(file, content, "utf8");
+  return true;
+}
+
 export async function generateWorkspace(options: {
   targetDir: string;
   sdl: string;
@@ -98,7 +115,7 @@ export async function generateWorkspace(options: {
   const { targetDir, sdl } = options;
   const generatedDir = path.join(targetDir, GENERATED_DIR);
   await mkdir(generatedDir, { recursive: true });
-  await ensureWorkspaceTsconfig(targetDir);
+  await ensureWorkspaceFiles(targetDir);
 
   const result: GenerationResult = {
     schemaPath: path.join(targetDir, "schema.graphql"),
