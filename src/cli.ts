@@ -87,7 +87,6 @@ async function main(): Promise<void> {
     fail(`--source is required when ${options.dir} does not exist`);
   } else {
     log(`serving existing ${options.dir} as-is (no --source, schema not regenerated)`);
-    await ensureWorkspaceFiles(targetDir);
   }
 
   if (!existsSync(schemaPath)) {
@@ -95,6 +94,7 @@ async function main(): Promise<void> {
   }
 
   await loadSchema(schemaPath);
+  if (!sourceDir) await ensureWorkspaceFiles(targetDir, runtime.schema);
   runtime.modules = await loadMockModules(targetDir);
   runtime.interceptors = await loadInterceptors(targetDir);
   await logSummary(targetDir);

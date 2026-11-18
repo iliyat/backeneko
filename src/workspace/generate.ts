@@ -23,10 +23,7 @@ import {
   withMockDirectives,
   type MockDirectiveUsage,
 } from "../schema/directives.ts";
-import {
-  INTERCEPT_DECLARATIONS_FILE,
-  interceptDeclarations,
-} from "../request/intercept-declarations.ts";
+import { TYPES_FILE, typeDeclarations } from "./types.ts";
 
 export const ENTITY_DIR = "entities";
 export const ROOT_DIRS = {
@@ -97,10 +94,13 @@ export async function ensureWorkspaceTsconfig(targetDir: string): Promise<boolea
   return true;
 }
 
-export async function ensureWorkspaceFiles(targetDir: string): Promise<boolean> {
+export async function ensureWorkspaceFiles(
+  targetDir: string,
+  schema: GraphQLSchema | null,
+): Promise<boolean> {
   const tsconfigChanged = await ensureWorkspaceTsconfig(targetDir);
-  const file = path.join(targetDir, INTERCEPT_DECLARATIONS_FILE);
-  const content = interceptDeclarations();
+  const file = path.join(targetDir, TYPES_FILE);
+  const content = typeDeclarations(schema);
   const existing = await readFile(file, "utf8").catch(() => null);
   if (existing === content) return tsconfigChanged;
   await mkdir(targetDir, { recursive: true });
@@ -115,7 +115,6 @@ export async function generateWorkspace(options: {
   const { targetDir, sdl } = options;
   const generatedDir = path.join(targetDir, GENERATED_DIR);
   await mkdir(generatedDir, { recursive: true });
-  await ensureWorkspaceFiles(targetDir);
 
   const result: GenerationResult = {
     schemaPath: path.join(targetDir, "schema.graphql"),
@@ -135,6 +134,7 @@ export async function generateWorkspace(options: {
   const warn = (message: string): void => {
     if (!result.warnings.includes(message)) result.warnings.push(message);
   };
+  await ensureWorkspaceFiles(targetDir, schema);
 
   const rootTypeNames = new Set(rootTypes(schema).map((type) => type.name));
 

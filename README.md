@@ -171,15 +171,21 @@ arrives. They live in the user-owned `.backeneko/intercept/` directory next to
 A file is a plain TypeScript module with optional exports:
 
 ```ts
-export function before(payload: ProxyPayload, ctx: InterceptContext): ProxyPayload {
+export function before(
+  payload: Backeneko.Proxy.Payload,
+  ctx: Backeneko.Intercept.Context,
+): Backeneko.Proxy.Payload {
   return { ...payload, variables: { ...payload.variables, limit: 10 } };
 }
 
-export function after(result: InterceptResult, ctx: InterceptContext): InterceptResult {
+export function after(
+  result: Backeneko.Intercept.Result,
+  ctx: Backeneko.Intercept.Context,
+): Backeneko.Intercept.Result {
   return { ...result, data: { ...result.data, users: [] } };
 }
 
-export function match(ctx: InterceptContext): boolean {
+export function match(ctx: Backeneko.Intercept.Context): boolean {
   return ctx.variables?.tier === "gold" && ctx.query.includes("preview");
 }
 ```
@@ -221,10 +227,37 @@ warning. A file without `mode` is just an interceptor and does not change
 routing.
 
 Adding, changing or removing an `intercept/` file reloads the interceptors
-without a restart. The generated `.backeneko/intercept.d.ts` declares
-`ProxyPayload`, `InterceptContext`, `InterceptResult`, `InterceptRoute` and
-`InterceptMode` globally, so intercept files need no imports; `@intercept/*`
-resolves inside the workspace.
+without a restart. The generated `.backeneko/types.d.ts` declares the global
+`Backeneko` namespace: `Backeneko.Proxy.Payload`,
+`Backeneko.Intercept.Context` / `Result` / `Error` / `Route` / `Mode` /
+`Before` / `After` / `Match`, and `Backeneko.Schema.*` built from
+`schema.graphql`. Intercept files need no imports; `@intercept/*` resolves
+inside the workspace.
+
+### Typing
+
+By default the dynamic parts are loose: `data` and `variables` are
+`Record<string, any> | null`, so `result.data.users` compiles without casts. For
+precise types, pass the generated schema types as generic parameters:
+
+```ts
+type Context = Backeneko.Intercept.Context<{ tier: "gold" | "silver" }>;
+type Result = Backeneko.Intercept.Result<{ users: Backeneko.Schema.User[] }>;
+
+export function match(ctx: Context): boolean {
+  return ctx.variables?.tier === "gold";
+}
+
+export function after(result: Result): Result {
+  return { ...result, data: { users: result.data?.users ?? [] } };
+}
+```
+
+`Backeneko.Proxy.Payload<TVariables>` and `Backeneko.Intercept.Context<TVariables>`
+take the same generic, so `before` can type its variables as well. The
+`Backeneko.Schema` namespace mirrors every named type of the schema: objects,
+interfaces, unions, enums, inputs and custom scalars (as `any`). Nullable fields
+become `T | null`; optional input fields become `field?: T`.
 
 ### Known limitations
 

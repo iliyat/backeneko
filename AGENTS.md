@@ -46,14 +46,15 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
 | `src/schema/directives.ts` | `@backeneko`/`@mock` directives: auto-declare, collect field values |
 | `src/schema/internal.ts` | the single deep import of `graphql`'s internal `validateSDL` |
 | `src/schema/resolvers.ts` | build executable schema, attach resolvers, mock fallback |
-| `src/workspace/generate.ts` | rewrite `schema.graphql`, `generated/**`, workspace `tsconfig.json`, `intercept.d.ts` |
+| `src/workspace/generate.ts` | rewrite `schema.graphql`, `generated/**`, workspace `tsconfig.json`, `types.d.ts` |
+| `src/workspace/types.ts` | global `Backeneko.Proxy`/`Backeneko.Intercept` blocks + `types.d.ts` assembly |
+| `src/schema/ts-types.ts` | render `Backeneko.Schema` declarations from a `GraphQLSchema` |
 | `src/workspace/bundle.ts` | `Bun.build` + content-hashed cache import, shared by mocks and interceptors |
 | `src/workspace/mocks.ts` | load mock modules (override-first) with `Bun.build`, `data:`-free cache dirs |
 | `src/request/server.ts` | `Bun.serve` HTTP: `/graphql` (GET/POST), HTML inspector at `/` |
 | `src/request/proxy.ts` | `--proxy-to` routing (`local`/`proxy`/`split`), upstream forwarding, result merge |
 | `src/request/split.ts` | AST surgery: root field extraction, sub-document building |
 | `src/request/intercept.ts` | `intercept/**` loader, selection, `before`/`after` pipeline, `mode` |
-| `src/request/intercept-declarations.ts` | content of the generated `intercept.d.ts` globals |
 
 Directories follow domains: `schema/` is the SDL pipeline, `workspace/` is
 generated workspace + user-module loading, `request/` is HTTP/GraphQL request
@@ -108,7 +109,7 @@ and the watcher stay at the root. Tests mirror this layout under `test/`
 .backeneko/
 ├── schema.graphql                  # merged schema (rewritten each start)
 ├── tsconfig.json                   # written by backeneko: @<dir>/* aliases, allowImportingTsExtensions
-├── intercept.d.ts                  # generated global types for intercept/ files
+├── types.d.ts                      # generated global Backeneko namespace
 ├── generated/                      # disposable mirror of the schema
 │   ├── entities/<TypeName>.ts      # one file per object/interface/union type
 │   ├── queries/<fieldName>.ts      # one file per Query field
@@ -171,8 +172,9 @@ and the watcher stay at the root. Tests mirror this layout under `test/`
 - `loadInterceptors` bundles each file with `Bun.build` (cache key
   `intercept-<folder>-<name>`) and keeps the previous module when a file stops
   loading. `runtime.interceptors` reloads together with `runtime.modules`.
-- `ensureWorkspaceFiles` writes `intercept.d.ts`; `@intercept/*` maps to
-  `intercept/*` in the workspace tsconfig.
+- `ensureWorkspaceFiles` writes `types.d.ts` (global `Backeneko.Proxy`,
+  `Backeneko.Intercept` and `Backeneko.Schema` rendered from the schema);
+  `@intercept/*` maps to `intercept/*` in the workspace tsconfig.
 
 ### Hot reload
 
