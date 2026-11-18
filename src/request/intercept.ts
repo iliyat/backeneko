@@ -145,6 +145,30 @@ export function operationMode(
   return interceptor?.mode ?? "auto";
 }
 
+export interface InterceptionScope {
+  kind: "operation" | "all-fields" | "fields";
+  fields: string[];
+}
+
+// Describes which hooks actually run for a request: the whole operation, every
+// root field, or only some of them. Mode-only files have no hooks and do not
+// count as interception.
+export function interceptionScope(
+  interceptors: Interceptor[],
+  rootFields: string[],
+): InterceptionScope | null {
+  const active = interceptors.filter(
+    (interceptor) => interceptor.before || interceptor.after,
+  );
+  if (active.length === 0) return null;
+  if (active.some((interceptor) => interceptor.scope === "operation")) {
+    return { kind: "operation", fields: [] };
+  }
+  const fields = [...new Set(active.map((interceptor) => interceptor.name))];
+  const complete = rootFields.length > 0 && rootFields.every((field) => fields.includes(field));
+  return { kind: complete ? "all-fields" : "fields", fields };
+}
+
 // Field interceptors are selected in operation order, then the operation-wide
 // one, so `before` runs outermost-first and `after` mirrors it.
 export function selectInterceptors(

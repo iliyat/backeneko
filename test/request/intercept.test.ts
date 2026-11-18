@@ -1,8 +1,9 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  interceptionScope,
   loadInterceptors,
   operationMode,
   runAfter,
@@ -182,6 +183,27 @@ describe("interceptor selection and pipeline", () => {
     expect(operationMode([auto, proxy], "GetPosts")).toBe("proxy");
     expect(operationMode([auto, proxy], null)).toBe("auto");
   });
+
+  test("describes how much of the operation the hooks cover", () => {
+    const users = hook("query", "users", { after: (result) => result });
+    const posts = hook("query", "posts", { before: (value) => value });
+    const modeOnly = hook("query", "viewer");
+    const operation = hook("operation", "Q", { after: (result) => result });
+
+    expect(interceptionScope([modeOnly], ["users"])).toBeNull();
+    expect(interceptionScope([users], ["users", "posts"])).toEqual({
+      kind: "fields",
+      fields: ["users"],
+    });
+    expect(interceptionScope([users, posts], ["users", "posts"])).toEqual({
+      kind: "all-fields",
+      fields: ["users", "posts"],
+    });
+    expect(interceptionScope([users, operation], ["users", "posts"])).toEqual({
+      kind: "operation",
+      fields: [],
+    });
+  });
 });
 
 describe("interceptor loading", () => {
@@ -351,6 +373,19 @@ async function run(
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }
 
+async function captureLogs(body: unknown): Promise<string[]> {
+  const lines: string[] = [];
+  const spy = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map((value) => String(value)).join(" "));
+  });
+  try {
+    await run(body);
+  } finally {
+    spy.mockRestore();
+  }
+  return lines;
+}
+
 function withOverrides(fields: string[]): void {
   runtime.modules = mockModules({
     entities: { User: { default: { id: "1", name: "Mocked" } } },
@@ -406,6 +441,37 @@ describe("intercepting proxied requests", () => {
     expect(silver.body.data).toEqual({ posts: ["remote"] });
     expect(upstream.requests[1]?.variables).toEqual({ limit: 42 });
     expect(gold.body.data).toEqual({ posts: ["intercepted"] });
+  });
+
+  test("marks a proxied line with the intercepted field names", async () => {
+    runtime.interceptors = [hook("query", "users", { after: (result) => result })];
+
+    const lines = await captureLogs({ query: "query Q { users { id } posts }" });
+    const proxied = lines.find((line) => line.includes("proxied →"));
+
+    expect(proxied).toMatch(/⇄.*users/);
+  });
+
+  test("marks an operation-level interception", async () => {
+    runtime.interceptors = [hook("operation", "Q", { after: (result) => result })];
+
+    const lines = await captureLogs({ query: "query Q { users { id } posts }" });
+    const proxied = lines.find((line) => line.includes("proxied →"));
+
+    expect(proxied).toMatch(/⇄.*operation/);
+  });
+
+  test("marks full field coverage across a split request", async () => {
+    withOverrides(["users"]);
+    runtime.interceptors = [
+      hook("query", "users", { after: (result) => result }),
+      hook("query", "posts", { before: (value) => value }),
+    ];
+
+    const lines = await captureLogs({ query: "query Q { users { id } posts }" });
+    const proxied = lines.find((line) => line.includes("proxied →"));
+
+    expect(proxied).toMatch(/⇄.*all fields/);
   });
 
   test("applies operation mode local without an override", async () => {

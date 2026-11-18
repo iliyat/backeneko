@@ -153,7 +153,10 @@ backeneko --source=./schemas --proxy-to=https://api.example.com/graphql
   hop-by-hop headers are dropped. Requests are normalized to `POST` with a JSON
   body.
 - Each proxied request is logged: `[backeneko] proxied → <url> (200, 14ms)`.
-  An unreachable upstream answers `502` with the reason.
+  When interceptors handled the request, the line ends with a magenta `⇄`
+  marker and its scope: `⇄ operation` (operation-wide hook), `⇄ all fields`
+  (every root field intercepted) or `⇄ <field>, ...` (only some fields). An
+  unreachable upstream answers `502` with the reason.
 
 ## Request interception
 

@@ -10,6 +10,7 @@ import {
 } from "graphql";
 import { collectRootFields, fragmentMap, mentionedRootFieldNames } from "./split.ts";
 import {
+  interceptionScope,
   normalizeVariables,
   operationMode,
   runAfter,
@@ -17,8 +18,9 @@ import {
   selectInterceptors,
   type InterceptBaseContext,
   type InterceptRoute,
+  type InterceptionScope,
 } from "./intercept.ts";
-import { log } from "../log.ts";
+import { log, paint } from "../log.ts";
 import {
   forwardToUpstream,
   mergeResults,
@@ -195,6 +197,7 @@ async function handleProxiedRequest(
   if (plan.mode === "proxy") {
     const base = requestContext(document, payload.operationName, "remote", proxy.target, payload);
     const selected = selectInterceptors(runtime.interceptors, base);
+    const mark = interceptedMark(interceptionScope(selected, base.rootFields));
     const outgoing = await runBefore(
       selected,
       {
@@ -207,10 +210,14 @@ async function handleProxiedRequest(
 
     const outcome = await forwardToUpstream(proxy, outgoing, request.headers);
     if (!outcome.ok) {
-      log(`proxy failed → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)`);
+      log(
+        `proxy failed → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)${mark}`,
+      );
       return json({ errors: [{ message: `proxy request failed: ${outcome.message}` }] }, outcome.status);
     }
-    log(`proxied → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)`);
+    log(
+      `proxied → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)${mark}`,
+    );
     const result = await runAfter(selected, readUpstreamResult(outcome.result), base);
     return json(result, outcome.status);
   }
@@ -257,19 +264,26 @@ async function handleProxiedRequest(
   };
   const remoteSelected = selectInterceptors(runtime.interceptors, remoteBase, { operation: false });
   const localSelected = selectInterceptors(runtime.interceptors, localBase, { operation: false });
+  const mark = interceptedMark(
+    interceptionScope([...whole, ...remoteSelected, ...localSelected], base.rootFields),
+  );
 
   const forwarded = await runBefore(remoteSelected, remotePayload, remoteBase, { allowQuery: false });
   const executed = await runBefore(localSelected, localPayload, localBase, { allowQuery: false });
 
   const remoteOutcome = await forwardToUpstream(proxy, forwarded, request.headers);
   if (!remoteOutcome.ok) {
-    log(`proxy failed → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
+    log(
+      `proxy failed → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)${mark}`,
+    );
     return json(
       { errors: [{ message: `proxy request failed: ${remoteOutcome.message}` }] },
       remoteOutcome.status,
     );
   }
-  log(`proxied → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
+  log(
+    `proxied → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)${mark}`,
+  );
 
   const local = await executeLocal(
     plan.localDocument,
@@ -327,6 +341,14 @@ function effectiveOperationName(
 ): string | null {
   if (operationName) return operationName;
   return getOperationAST(document)?.name?.value ?? null;
+}
+
+function interceptedMark(scope: InterceptionScope | null): string {
+  if (!scope) return "";
+  const icon = paint(process.stdout, "1;35", "⇄");
+  if (scope.kind === "operation") return ` ${icon} operation`;
+  if (scope.kind === "all-fields") return ` ${icon} all fields`;
+  return ` ${icon} ${scope.fields.join(", ")}`;
 }
 
 function operationLabel(document: DocumentNode, operationName: string | null | undefined): string {
