@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { graphql, parse, print, type GraphQLObjectType } from "graphql";
-import { compileDocument } from "../src/compile.ts";
-import { buildExecutableSchema } from "../src/resolvers.ts";
-import { runtime } from "../src/runtime.ts";
-import { emptyMockModules } from "../src/mocks.ts";
-import { mockModules } from "./helpers.ts";
+import { compileDocument } from "../../src/schema/compile.ts";
+import { buildExecutableSchema } from "../../src/schema/resolvers.ts";
+import { runtime } from "../../src/runtime.ts";
+import { emptyMockModules } from "../../src/workspace/mocks.ts";
+import { mockModules } from "../helpers.ts";
 
 function compile(sdl: string) {
   return compileDocument(parse(sdl));

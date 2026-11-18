@@ -4,10 +4,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { graphql } from "graphql";
-import { generateWorkspace } from "../src/generate.ts";
-import { emptyMockModules, loadMockModules } from "../src/mocks.ts";
-import { buildExecutableSchema } from "../src/resolvers.ts";
-import { runtime } from "../src/runtime.ts";
+import { generateWorkspace } from "../../src/workspace/generate.ts";
+import { emptyMockModules, loadMockModules } from "../../src/workspace/mocks.ts";
+import { buildExecutableSchema } from "../../src/schema/resolvers.ts";
+import { runtime } from "../../src/runtime.ts";
 
 const SDL = `
 type Query {
@@ -134,6 +134,57 @@ describe("generateWorkspace", () => {
       "override/entities/*",
       "generated/entities/*",
     ]);
+  });
+
+  test("writes global types and aliases the intercept directory", async () => {
+    await generateWorkspace({ targetDir: dir, sdl: SDL });
+
+    const config = JSON.parse(await readFile(path.join(dir, "tsconfig.json"), "utf8"));
+    expect(config.compilerOptions.paths["@intercept/*"]).toEqual(["intercept/*"]);
+
+    const declarations = await readFile(path.join(dir, "types.d.ts"), "utf8");
+    expect(declarations).toContain("declare namespace Backeneko");
+    expect(declarations).toContain("namespace Proxy");
+    expect(declarations).toContain("namespace Intercept");
+    expect(declarations).toContain("namespace Schema");
+    expect(declarations).toContain("interface User {");
+    expect(declarations).toContain('type Role = "ADMIN" | "VIEWER";');
+    expect(existsSync(path.join(dir, "intercept.d.ts"))).toBe(false);
+  });
+
+  test("generated types compile in a workspace with an interceptor", async () => {
+    await generateWorkspace({ targetDir: dir, sdl: SDL });
+    await mkdir(path.join(dir, "intercept", "queries"), { recursive: true });
+    await writeFile(
+      path.join(dir, "intercept", "queries", "users.ts"),
+      `type Context = Backeneko.Intercept.Context<{ tier: "gold" | "silver" }>;
+type Result = Backeneko.Intercept.Result<{ users: Backeneko.Schema.User[] }>;
+
+export function match(ctx: Context): boolean {
+  return ctx.variables?.tier === "gold";
+}
+
+export function before(payload: Backeneko.Proxy.Payload): Backeneko.Proxy.Payload {
+  return payload;
+}
+
+export function after(result: Result): Result {
+  return { ...result, data: { users: result.data?.users ?? [] } };
+}
+
+export const mode: Backeneko.Intercept.Mode = "auto";
+`,
+      "utf8",
+    );
+
+    const tsc = path.join(import.meta.dir, "..", "..", "node_modules", ".bin", "tsc");
+    const build = Bun.spawnSync([tsc, "--noEmit", "-p", dir], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(build.stderr.toString()).toBe("");
+    expect(build.exitCode).toBe(0);
   });
 
   test("fills entity mock values based on field types", async () => {

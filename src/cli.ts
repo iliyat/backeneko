@@ -3,20 +3,21 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseCliArgs, printHelp } from "./args.ts";
-import { collectSchemaFiles, isIgnoredSourcePath } from "./collect.ts";
-import { compileDocument } from "./compile.ts";
+import { collectSchemaFiles, isIgnoredSourcePath } from "./schema/collect.ts";
+import { compileDocument } from "./schema/compile.ts";
 import {
   GENERATED_DIR,
   OVERRIDE_DIR,
-  ensureWorkspaceTsconfig,
+  ensureWorkspaceFiles,
   generateWorkspace,
   type GenerationResult,
-} from "./generate.ts";
-import { mergeSchemaDocuments, renderSdl } from "./merge.ts";
-import { loadMockModules } from "./mocks.ts";
-import { buildExecutableSchema } from "./resolvers.ts";
+} from "./workspace/generate.ts";
+import { mergeSchemaDocuments, renderSdl } from "./schema/merge.ts";
+import { loadInterceptors, INTERCEPT_DIR } from "./request/intercept.ts";
+import { loadMockModules } from "./workspace/mocks.ts";
+import { buildExecutableSchema } from "./schema/resolvers.ts";
 import { runtime } from "./runtime.ts";
-import { startServer } from "./server.ts";
+import { startServer } from "./request/server.ts";
 import { watchTree } from "./watch.ts";
 import { log, logError, paint, warn } from "./log.ts";
 
@@ -86,7 +87,6 @@ async function main(): Promise<void> {
     fail(`--source is required when ${options.dir} does not exist`);
   } else {
     log(`serving existing ${options.dir} as-is (no --source, schema not regenerated)`);
-    await ensureWorkspaceTsconfig(targetDir);
   }
 
   if (!existsSync(schemaPath)) {
@@ -94,7 +94,9 @@ async function main(): Promise<void> {
   }
 
   await loadSchema(schemaPath);
+  if (!sourceDir) await ensureWorkspaceFiles(targetDir, runtime.schema);
   runtime.modules = await loadMockModules(targetDir);
+  runtime.interceptors = await loadInterceptors(targetDir);
   await logSummary(targetDir);
 
   const server = startServer(options.port, {
@@ -133,6 +135,7 @@ async function main(): Promise<void> {
 
   const reloadMocks = async (label: string): Promise<void> => {
     runtime.modules = await loadMockModules(targetDir, runtime.modules);
+    runtime.interceptors = await loadInterceptors(targetDir, runtime.interceptors);
     log(`mocks reloaded (${label})`);
   };
 
@@ -245,6 +248,11 @@ async function logSummary(targetDir: string): Promise<void> {
   const overrides = await countFiles(path.join(targetDir, OVERRIDE_DIR));
   if (overrides > 0) {
     log(`${overrides} override file(s) in ${path.relative(process.cwd(), path.join(targetDir, OVERRIDE_DIR))}`);
+  }
+
+  const interceptors = runtime.interceptors.length;
+  if (interceptors > 0) {
+    log(`${interceptors} interceptor file(s) in ${path.relative(process.cwd(), path.join(targetDir, INTERCEPT_DIR))}`);
   }
 }
 

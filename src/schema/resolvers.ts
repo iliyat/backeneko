@@ -13,7 +13,7 @@ import {
   type GraphQLSchema,
   type GraphQLType,
 } from "graphql";
-import { runtime } from "./runtime.ts";
+import { runtime } from "../runtime.ts";
 
 type FieldOwner = GraphQLObjectType | GraphQLInterfaceType;
 

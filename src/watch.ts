@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from "node:fs";
-import { BUNDLE_DIR } from "./mocks.ts";
+import { BUNDLE_DIR } from "./workspace/mocks.ts";
 
 const DEBOUNCE_MS = 150;
 

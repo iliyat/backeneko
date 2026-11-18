@@ -5,7 +5,7 @@ import {
   fieldShape,
   renderMockValue,
   withMockDirectives,
-} from "../src/directives.ts";
+} from "../../src/schema/directives.ts";
 
 describe("withMockDirectives", () => {
   test("injects a definition for an undeclared directive", () => {

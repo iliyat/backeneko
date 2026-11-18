@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { buildExecutableSchema } from "../src/resolvers.ts";
-import { runtime } from "../src/runtime.ts";
-import { startServer, type ServerHandle } from "../src/server.ts";
-import { mockModules } from "./helpers.ts";
+import { buildExecutableSchema } from "../../src/schema/resolvers.ts";
+import { runtime } from "../../src/runtime.ts";
+import { startServer, type ServerHandle } from "../../src/request/server.ts";
+import { mockModules } from "../helpers.ts";
 
 const SDL = `
 type User {

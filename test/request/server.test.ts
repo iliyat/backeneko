@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { buildExecutableSchema } from "../src/resolvers.ts";
-import { runtime } from "../src/runtime.ts";
-import { startServer, type ServerHandle } from "../src/server.ts";
+import { buildExecutableSchema } from "../../src/schema/resolvers.ts";
+import { runtime } from "../../src/runtime.ts";
+import { startServer, type ServerHandle } from "../../src/request/server.ts";
 
 const SDL = `
 type Query {

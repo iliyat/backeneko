@@ -14,7 +14,8 @@ import {
   fragmentMap,
   mentionedRootFieldNames,
   type RootField,
-} from "./graphql/split.ts";
+} from "./split.ts";
+import type { InterceptMode } from "./intercept.ts";
 
 export const DEFAULT_PROXY_TIMEOUT_MS = 30_000;
 
@@ -39,6 +40,8 @@ export type RoutePlan =
       mode: "split";
       localDocument: DocumentNode;
       remoteDocument: DocumentNode;
+      localFieldNames: string[];
+      remoteFieldNames: string[];
       localVariables: string[];
       remoteVariables: string[];
       order: string[];
@@ -55,14 +58,19 @@ const ROOT_TYPE_BY_OPERATION: Record<"query" | "mutation" | "subscription", stri
 // Decides where a request goes: local execution, the upstream service, or a
 // split where overridden root fields are answered locally and the rest is
 // forwarded. A root field is local when the user has an `override/<kind>/`
-// file for it and the local schema knows the field.
+// file for it and the local schema knows the field. An interceptor's `mode`
+// overrides the per-field decision for the whole operation.
 export function planRequest(input: {
   document: DocumentNode;
   operationName: string | null;
   schema: GraphQLSchema | null;
   overriddenRoot: Map<string, Set<string>>;
+  mode?: InterceptMode;
 }): RoutePlan {
-  const { document, operationName, schema, overriddenRoot } = input;
+  const { document, operationName, schema, overriddenRoot, mode } = input;
+  if (mode === "proxy") return { mode: "proxy" };
+  if (mode === "local") return { mode: "local" };
+
   const fragments = fragmentMap(document);
   const operation = getOperationAST(document, operationName ?? undefined);
 
@@ -101,6 +109,8 @@ export function planRequest(input: {
     mode: "split",
     localDocument: localSub.document,
     remoteDocument: remoteSub.document,
+    localFieldNames: local.map((field) => field.name),
+    remoteFieldNames: remote.map((field) => field.name),
     localVariables: localSub.variables,
     remoteVariables: remoteSub.variables,
     order: rootFields.map((field) => field.key),

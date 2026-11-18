@@ -6,8 +6,21 @@ import {
   print,
   validate,
   type DocumentNode,
+  type GraphQLSchema,
 } from "graphql";
-import { log } from "./log.ts";
+import { collectRootFields, fragmentMap, mentionedRootFieldNames } from "./split.ts";
+import {
+  interceptionScope,
+  normalizeVariables,
+  operationMode,
+  runAfter,
+  runBefore,
+  selectInterceptors,
+  type InterceptBaseContext,
+  type InterceptRoute,
+  type InterceptionScope,
+} from "./intercept.ts";
+import { log, paint } from "../log.ts";
 import {
   forwardToUpstream,
   mergeResults,
@@ -17,7 +30,7 @@ import {
   type ProxyOptions,
   type UpstreamResult,
 } from "./proxy.ts";
-import { runtime } from "./runtime.ts";
+import { runtime } from "../runtime.ts";
 
 export interface ServerHandle {
   port: number;
@@ -114,6 +127,28 @@ async function handleRequest(
     return json({ errors: [{ message: "schema is not loaded yet" }] }, 503);
   }
 
+  return executeLocally(payload, document, schema, validateQueries);
+}
+
+async function executeLocally(
+  payload: GraphQLRequestPayload,
+  document: DocumentNode,
+  schema: GraphQLSchema,
+  validateQueries: boolean,
+): Promise<Response> {
+  const base = requestContext(document, payload.operationName, "local", null, payload);
+  const selected = selectInterceptors(runtime.interceptors, base);
+  const before = await runBefore(
+    selected,
+    {
+      query: payload.query,
+      variables: payload.variables,
+      operationName: payload.operationName,
+    },
+    base,
+    { allowQuery: false },
+  );
+
   try {
     if (validateQueries) {
       const validationErrors = validate(schema, document);
@@ -122,18 +157,18 @@ async function handleRequest(
     const result = await execute({
       schema,
       document,
-      variableValues: payload.variables as never,
+      variableValues: before.variables as never,
       operationName: payload.operationName ?? undefined,
       contextValue: {},
     });
-    return json(result);
+    return json(await runAfter(selected, result, base));
   } catch (error) {
     return json({ errors: [errorEntry(error)] }, 500);
   }
 }
 
 // Returns null when the request is handled locally, so the caller falls back to
-// the regular mock execution.
+// the regular mock execution (which runs the interceptors of the local route).
 async function handleProxiedRequest(
   request: Request,
   payload: GraphQLRequestPayload,
@@ -141,11 +176,14 @@ async function handleProxiedRequest(
   proxy: ProxyOptions,
   validateQueries: boolean,
 ): Promise<Response | null> {
+  const operationName = effectiveOperationName(document, payload.operationName);
+  const mode = operationMode(runtime.interceptors, operationName);
   const plan = planRequest({
     document,
     operationName: payload.operationName,
     schema: runtime.schema,
     overriddenRoot: runtime.modules.overriddenRoot,
+    mode,
   });
 
   if (plan.mode === "error") {
@@ -157,50 +195,160 @@ async function handleProxiedRequest(
   const label = operationLabel(document, payload.operationName);
 
   if (plan.mode === "proxy") {
-    const outcome = await forwardToUpstream(
-      proxy,
+    const base = requestContext(document, payload.operationName, "remote", proxy.target, payload);
+    const selected = selectInterceptors(runtime.interceptors, base);
+    const mark = interceptedMark(interceptionScope(selected, base.rootFields));
+    const outgoing = await runBefore(
+      selected,
       {
         query: payload.query,
         variables: payload.variables,
         operationName: payload.operationName,
       },
-      request.headers,
+      base,
     );
+
+    const outcome = await forwardToUpstream(proxy, outgoing, request.headers);
     if (!outcome.ok) {
-      log(`proxy failed → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)`);
+      log(
+        `proxy failed → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)${mark}`,
+      );
       return json({ errors: [{ message: `proxy request failed: ${outcome.message}` }] }, outcome.status);
     }
-    log(`proxied → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)`);
-    return json(outcome.result, outcome.status);
+    log(
+      `proxied → ${proxy.target} (${label}, ${outcome.status}, ${outcome.durationMs}ms)${mark}`,
+    );
+    const result = await runAfter(selected, readUpstreamResult(outcome.result), base);
+    return json(result, outcome.status);
   }
 
-  const remoteOutcome = await forwardToUpstream(
-    proxy,
+  // In split mode the operation-wide interceptor wraps the whole request; field
+  // interceptors only see their own part, so no hook runs twice. The operation
+  // hook runs before the split, so a field `match()` sees the variables it
+  // actually forwards.
+  const base = requestContext(document, payload.operationName, "split", proxy.target, payload);
+  const whole = selectInterceptors(runtime.interceptors, base, { field: false });
+  const before = await runBefore(
+    whole,
     {
-      query: print(plan.remoteDocument),
-      variables: pickVariables(payload.variables, plan.remoteVariables),
+      query: payload.query,
+      variables: payload.variables,
       operationName: payload.operationName,
     },
-    request.headers,
+    base,
+    { allowQuery: false },
   );
+
+  const remotePayload = {
+    query: print(plan.remoteDocument),
+    variables: pickVariables(before.variables, plan.remoteVariables),
+    operationName: payload.operationName,
+  };
+  const localPayload = {
+    query: payload.query,
+    variables: before.variables,
+    operationName: payload.operationName,
+  };
+
+  const remoteBase = {
+    ...base,
+    rootFields: plan.remoteFieldNames,
+    query: remotePayload.query,
+    variables: normalizeVariables(remotePayload.variables),
+  };
+  const localBase = {
+    ...base,
+    rootFields: plan.localFieldNames,
+    query: localPayload.query,
+    variables: normalizeVariables(localPayload.variables),
+  };
+  const remoteSelected = selectInterceptors(runtime.interceptors, remoteBase, { operation: false });
+  const localSelected = selectInterceptors(runtime.interceptors, localBase, { operation: false });
+  const mark = interceptedMark(
+    interceptionScope([...whole, ...remoteSelected, ...localSelected], base.rootFields),
+  );
+
+  const forwarded = await runBefore(remoteSelected, remotePayload, remoteBase, { allowQuery: false });
+  const executed = await runBefore(localSelected, localPayload, localBase, { allowQuery: false });
+
+  const remoteOutcome = await forwardToUpstream(proxy, forwarded, request.headers);
   if (!remoteOutcome.ok) {
-    log(`proxy failed → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
+    log(
+      `proxy failed → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)${mark}`,
+    );
     return json(
       { errors: [{ message: `proxy request failed: ${remoteOutcome.message}` }] },
       remoteOutcome.status,
     );
   }
-  log(`proxied → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)`);
+  log(
+    `proxied → ${proxy.target} (${label}, ${remoteOutcome.status}, ${remoteOutcome.durationMs}ms)${mark}`,
+  );
 
   const local = await executeLocal(
     plan.localDocument,
-    payload.variables,
+    executed.variables,
     plan.localVariables,
     validateQueries,
   );
-  const remote = readUpstreamResult(remoteOutcome.result);
-  const merged = mergeResults(local, remote, plan.order, plan.localKeys, plan.remoteKeys);
-  return json(merged);
+  const remoteResult = await runAfter(
+    remoteSelected,
+    readUpstreamResult(remoteOutcome.result),
+    remoteBase,
+  );
+  const localResult = await runAfter(localSelected, local, localBase);
+  const merged = mergeResults(
+    readUpstreamResult(localResult),
+    readUpstreamResult(remoteResult),
+    plan.order,
+    plan.localKeys,
+    plan.remoteKeys,
+  );
+  return json(await runAfter(whole, merged, base));
+}
+
+function requestContext(
+  document: DocumentNode,
+  operationName: string | null,
+  route: InterceptRoute,
+  target: string | null,
+  payload: GraphQLRequestPayload,
+): InterceptBaseContext {
+  const operation = getOperationAST(document, operationName ?? undefined);
+  const fragments = fragmentMap(document);
+  const fields = operation ? collectRootFields(operation, fragments) : null;
+  const rootFields = fields
+    ? [...new Set(fields.map((field) => field.name))]
+    : operation
+      ? mentionedRootFieldNames(operation, fragments)
+      : [];
+  return {
+    operationName: effectiveOperationName(document, operationName),
+    operationType: operation?.operation ?? "query",
+    rootFields,
+    route,
+    target,
+    query: payload.query,
+    variables: normalizeVariables(payload.variables),
+  };
+}
+
+// The request field may be omitted for a document with a single named
+// operation; intercept/operations/<name>.ts should still match it.
+function effectiveOperationName(
+  document: DocumentNode,
+  operationName: string | null,
+): string | null {
+  if (operationName) return operationName;
+  return getOperationAST(document)?.name?.value ?? null;
+}
+
+function interceptedMark(scope: InterceptionScope | null): string {
+  if (!scope) return "";
+  const icon = paint(process.stdout, "1;35", "⇄");
+  if (scope.kind === "operation") return ` ${icon} operation`;
+  if (scope.kind === "all-fields") return ` ${icon} all fields`;
+  return ` ${icon} ${scope.fields.join(", ")}`;
 }
 
 function operationLabel(document: DocumentNode, operationName: string | null | undefined): string {

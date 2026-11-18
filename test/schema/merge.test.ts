@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildASTSchema } from "graphql";
-import { mergeSchemaDocuments } from "../src/merge.ts";
-import type { SchemaSourceFile } from "../src/collect.ts";
+import { mergeSchemaDocuments } from "../../src/schema/merge.ts";
+import type { SchemaSourceFile } from "../../src/schema/collect.ts";
 
 function file(relativePath: string, content: string): SchemaSourceFile {
   return { absolutePath: `/${relativePath}`, relativePath, content };

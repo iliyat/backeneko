@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isIgnoredSourcePath } from "../src/collect.ts";
+import { isIgnoredSourcePath } from "../../src/schema/collect.ts";
 
 describe("isIgnoredSourcePath", () => {
   test("keeps schema files anywhere", () => {

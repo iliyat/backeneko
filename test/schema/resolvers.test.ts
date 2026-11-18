@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { graphql } from "graphql";
-import { buildExecutableSchema } from "../src/resolvers.ts";
-import { runtime } from "../src/runtime.ts";
-import { emptyMockModules } from "../src/mocks.ts";
-import { mockModules } from "./helpers.ts";
+import { buildExecutableSchema } from "../../src/schema/resolvers.ts";
+import { runtime } from "../../src/runtime.ts";
+import { emptyMockModules } from "../../src/workspace/mocks.ts";
+import { mockModules } from "../helpers.ts";
 
 const SDL = `
 type Query {

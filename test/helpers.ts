@@ -1,4 +1,4 @@
-import { emptyMockModules, type MockModule, type MockModules } from "../src/mocks.ts";
+import { emptyMockModules, type MockModule, type MockModules } from "../src/workspace/mocks.ts";
 
 export function mockModules(options: {
   entities?: Record<string, MockModule>;

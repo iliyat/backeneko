@@ -37,20 +37,31 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
 | --- | --- |
 | `src/cli.ts` | entry point: parse args, generate workspace, start server + watcher |
 | `src/args.ts` | CLI argument parsing and help text |
-| `src/collect.ts` | recursive discovery of `.graphql`/`.gql` files |
-| `src/merge.ts` | merge SDL documents; repeated types → `extend`, `renderSdl` |
-| `src/compile.ts` | tolerant schema build: drop unknown directives, prune broken defs |
-| `src/graphql/internal.ts` | the single deep import of `graphql`'s internal `validateSDL` |
-| `src/generate.ts` | rewrite `schema.graphql`, `generated/**`, workspace `tsconfig.json` |
-| `src/directives.ts` | `@backeneko`/`@mock` directives: auto-declare, collect field values |
-| `src/mocks.ts` | load mock modules (override-first) with `Bun.build`, `data:`-free cache dirs |
-| `src/resolvers.ts` | build executable schema, attach resolvers, mock fallback |
-| `src/runtime.ts` | mutable shared state (`schema`, `modules`) |
-| `src/server.ts` | `Bun.serve` HTTP: `/graphql` (GET/POST), HTML inspector at `/` |
-| `src/proxy.ts` | `--proxy-to` routing (`local`/`proxy`/`split`), upstream forwarding, result merge |
-| `src/graphql/split.ts` | AST surgery: root field extraction, sub-document building |
 | `src/log.ts` | shared `log`/`warn`/`logError` helpers |
+| `src/runtime.ts` | mutable shared state (`schema`, `modules`, `interceptors`) |
 | `src/watch.ts` | recursive `fs.watch` with debounce (workspace, `--source` tree) |
+| `src/schema/collect.ts` | recursive discovery of `.graphql`/`.gql` files |
+| `src/schema/merge.ts` | merge SDL documents; repeated types → `extend`, `renderSdl` |
+| `src/schema/compile.ts` | tolerant schema build: drop unknown directives, prune broken defs |
+| `src/schema/directives.ts` | `@backeneko`/`@mock` directives: auto-declare, collect field values |
+| `src/schema/internal.ts` | the single deep import of `graphql`'s internal `validateSDL` |
+| `src/schema/resolvers.ts` | build executable schema, attach resolvers, mock fallback |
+| `src/workspace/generate.ts` | rewrite `schema.graphql`, `generated/**`, workspace `tsconfig.json`, `types.d.ts` |
+| `src/workspace/types.ts` | global `Backeneko.Proxy`/`Backeneko.Intercept` blocks + `types.d.ts` assembly |
+| `src/schema/ts-types.ts` | render `Backeneko.Schema` declarations from a `GraphQLSchema` |
+| `src/workspace/bundle.ts` | `Bun.build` + content-hashed cache import, shared by mocks and interceptors |
+| `src/workspace/mocks.ts` | load mock modules (override-first) with `Bun.build`, `data:`-free cache dirs |
+| `src/request/server.ts` | `Bun.serve` HTTP: `/graphql` (GET/POST), HTML inspector at `/` |
+| `src/request/proxy.ts` | `--proxy-to` routing (`local`/`proxy`/`split`), upstream forwarding, result merge |
+| `src/request/split.ts` | AST surgery: root field extraction, sub-document building |
+| `src/request/intercept.ts` | `intercept/**` loader, selection, `before`/`after` pipeline, `mode` |
+
+Directories follow domains: `schema/` is the SDL pipeline, `workspace/` is
+generated workspace + user-module loading, `request/` is HTTP/GraphQL request
+handling. Only the CLI entry, its argument parser, logging, shared runtime state
+and the watcher stay at the root. Tests mirror this layout under `test/`
+(`test/schema/`, `test/workspace/`, `test/request/`); shared fixtures stay in
+`test/helpers.ts`.
 
 ### Behavior rules
 
@@ -78,14 +89,19 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
   skips the validation step (unknown fields are then silently dropped). Parsed
   documents are cached by query text, which is schema-independent.
 - With `--proxy-to=<url>` the request is routed by `planRequest()`
-  (`src/proxy.ts`): `local` when every root field of the operation has an
+  (`src/request/proxy.ts`): `local` when every root field of the operation has an
   override, `proxy` when none has, `split` when only some have — the
   overridden fields are executed locally, the rest is sent upstream, and both
   results are merged (`mergeResults`). A document with several operations is
   routed by `operationName`; without it the document is forwarded as-is and the
   upstream reports the ambiguity. Only the variables and root keys the
-  forwarded part uses are sent. Interception of the payload is planned but not
-  implemented.
+  forwarded part uses are sent. `intercept/` adds the payload layer:
+  `before`/`after` hooks plus `mode` on `intercept/operations/<name>.ts`, which
+  forces the whole operation `proxy` or `local` ahead of the per-field decision.
+  In split mode each part runs only its own field interceptors and the
+  operation interceptor runs once around both. On a local route `before` may
+  change only `variables`; `query`/`operationName` changes are dropped with a
+  warning.
 
 ### Workspace layout and mock contract
 
@@ -93,13 +109,18 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
 .backeneko/
 ├── schema.graphql                  # merged schema (rewritten each start)
 ├── tsconfig.json                   # written by backeneko: @<dir>/* aliases, allowImportingTsExtensions
+├── types.d.ts                      # generated global Backeneko namespace
 ├── generated/                      # disposable mirror of the schema
 │   ├── entities/<TypeName>.ts      # one file per object/interface/union type
 │   ├── queries/<fieldName>.ts      # one file per Query field
 │   ├── mutations/<fieldName>.ts    # one file per Mutation field
 │   └── subscriptions/<fieldName>.ts
 ├── override/                       # user-owned; same structure, never written
-└── cache/<name>-<hash>/<name>.mjs  # bundled mock modules
+├── intercept/                      # user-owned; never written
+│   ├── queries/<fieldName>.ts
+│   ├── mutations/<fieldName>.ts
+│   └── operations/<operationName>.ts   # default.ts for an unnamed operation
+└── cache/<name>-<hash>/<name>.mjs  # bundled mock / interceptor modules
 ```
 
 - Generation emits imports through the workspace path aliases
@@ -126,7 +147,7 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
   reduced to their first element to match the field shape.
 - **Mock directives** `@backeneko(value: "...")` and `@mock(value: "...")` (both
   names are equivalent) pin an entity field's generated value. backeneko owns
-  them: if a schema uses one without declaring it, `src/compile.ts` injects
+  them: if a schema uses one without declaring it, `src/schema/compile.ts` injects
   `directive @<name>(value: String, empty: Boolean) on FIELD_DEFINITION` before
   SDL validation; a user declaration is kept, but missing backeneko arguments
   are appended to it so both always validate. The value is always a string and
@@ -140,12 +161,29 @@ Always run `bun run typecheck` and `bun test` before considering a task done.
   over `value` (with a warning). Warnings are returned in
   `GenerationResult.warnings` and printed by the CLI.
 
+### Interceptors
+
+- `intercept/queries|mutations/<field>.ts` and `intercept/operations/<name>.ts`
+  export optional `before(payload, ctx)`, `after(result, ctx)`, `match(ctx)`;
+  operation files may also export `mode: "auto" | "proxy" | "local"`.
+- Selection: field interceptors in operation order, then the operation one;
+  `before` runs outside-in, `after` inside-out. `match(ctx)` sees that part's
+  `query`/`variables` and gates both hooks of the interceptor.
+- `loadInterceptors` bundles each file with `Bun.build` (cache key
+  `intercept-<folder>-<name>`) and keeps the previous module when a file stops
+  loading. `runtime.interceptors` reloads together with `runtime.modules`.
+- `ensureWorkspaceFiles` writes `types.d.ts` (global `Backeneko.Proxy`,
+  `Backeneko.Intercept` and `Backeneko.Schema` rendered from the schema);
+  `@intercept/*` maps to `intercept/*` in the workspace tsconfig.
+
 ### Hot reload
 
-`fs.watch` is recursive and debounced (150 ms). Mock files are re-imported by
-bundling with `Bun.build` and writing the JS to a per-bundle directory inside
-the workspace, `.backeneko/cache/<name>-<contentHash>/<name>.mjs`, then
-importing that path. Three Bun constraints dictate this:
+`fs.watch` is recursive and debounced (150 ms). Mock and interceptor files are
+re-imported by bundling with `Bun.build` and writing the JS to a per-bundle
+directory inside the workspace, `.backeneko/cache/<name>-<contentHash>/<name>.mjs`,
+then importing that path. Both loaders share `src/workspace/bundle.ts` but use distinct
+cache keys (`<name>` vs `intercept-<folder>-<name>`), so pruning one never
+removes the other. Three Bun constraints dictate this:
 - `?t=` query-string cache busting does not work in Bun;
 - a `data:text/javascript;base64,...` URL breaks once a module gets large
   (`ResolveMessage: NameTooLong`);

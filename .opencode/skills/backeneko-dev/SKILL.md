@@ -28,7 +28,7 @@ of GraphQL schemas and serves it as a mock GraphQL backend.
 - **Cache busting:** Bun ignores `?t=` query strings when re-importing the same
   file, and a `data:text/javascript;base64,...` URL fails once a module is large
   (`NameTooLong`). Worse, Bun does not resolve files that appear in a directory
-  *after* the first import from that directory. So `src/mocks.ts` bundles each
+  *after* the first import from that directory. So `src/workspace/mocks.ts` bundles each
   mock with `Bun.build` and imports it from its own content-hashed directory
   under `.backeneko/cache/<name>-<hash>/<name>.mjs`. `watch.ts` skips the
   `cache` directory so writing a bundle does not trigger a reload. Never drop
@@ -38,21 +38,21 @@ of GraphQL schemas and serves it as a mock GraphQL backend.
   `schema.graphql` changes trigger a rebuild.
 - **generated/ vs override/:** `generateWorkspace` rewrites `generated/**`
   (write-if-changed) and prunes files whose type/field left the schema; it must
-  never touch `override/**`. The loader in `src/mocks.ts` resolves
+  never touch `override/**`. The loader in `src/workspace/mocks.ts` resolves
   `override/<kind>/<name>.ts` first, then `generated/<kind>/<name>.ts`.
   `MockModules.overriddenRoot` lists the root fields that come from an
   `override/` file — only those are answered locally when the request is
   proxied.
-- **Proxying:** `--proxy-to=<url>` routes a request in `src/proxy.ts`:
+- **Proxying:** `--proxy-to=<url>` routes a request in `src/request/proxy.ts`:
   `local` (every root field has an override), `proxy` (none has) or `split`
   (some have — the overridden fields run locally, the rest is forwarded and the
-  results are merged). `src/graphql/split.ts` does the AST surgery; only the
+  results are merged). `src/request/split.ts` does the AST surgery; only the
   variables and root keys the forwarded part uses are sent upstream.
 - **Path aliases:** generation emits `@entities/...` (etc.) imports and writes a
   `.backeneko/tsconfig.json` mapping each alias to
   `override/<dir>/*`, `generated/<dir>/*`, `<dir>/*`, plus
   `allowImportingTsExtensions`/`noEmit` so editors accept the `.ts` specifiers.
-  `src/mocks.ts` passes that tsconfig explicitly to `Bun.build` (`tsconfig`
+  `src/workspace/mocks.ts` passes that tsconfig explicitly to `Bun.build` (`tsconfig`
   option) — without it Bun falls back to the repo tsconfig and the aliases fail
   to resolve. This is how a generated relation getter picks up a user override.
 - **Merging:** duplicate type definitions across files become `extend` blocks
